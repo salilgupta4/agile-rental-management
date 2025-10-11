@@ -47,6 +47,7 @@ const ReportsPage = () => {
     const { data: returns, loading: returnsLoading } = useCollection('returns');
     const { data: sales, loading: salesLoading } = useCollection('sales');
     const { data: purchases, loading: purchasesLoading } = useCollection('purchases');
+    const { data: rentalOrders, loading: rentalOrdersLoading } = useCollection('rentalOrders');
     const { calculateGST } = useGST();
 
     const [rentalReportData, setRentalReportData] = useState([]);
@@ -54,7 +55,7 @@ const ReportsPage = () => {
     const [rentalReportParams, setRentalReportParams] = useState(null);
     const [transactionDateRange, setTransactionDateRange] = useState(null);
 
-    const loading = inventoryLoading || warehousesLoading || customersLoading || transfersLoading || returnsLoading || salesLoading || purchasesLoading;
+    const loading = inventoryLoading || warehousesLoading || customersLoading || transfersLoading || returnsLoading || salesLoading || purchasesLoading || rentalOrdersLoading;
 
     // Helper function to format currency
     const formatCurrency = (value) => {
