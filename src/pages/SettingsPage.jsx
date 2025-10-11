@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Table, Button, Modal, Input, Select, Row, Col, message, InputNumber, Switch, Space, Divider, Checkbox, Typography, Form, Tabs } from 'antd';
-import { DeleteOutlined, ExclamationCircleOutlined, SaveOutlined, SettingOutlined, PlusOutlined, KeyOutlined, MailOutlined, LockOutlined, SyncOutlined } from '@ant-design/icons';
+import { DeleteOutlined, ExclamationCircleOutlined, SaveOutlined, SettingOutlined, PlusOutlined, KeyOutlined, MailOutlined, LockOutlined } from '@ant-design/icons';
 import { doc, getDoc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { db, auth } from '../services/firebase';
@@ -8,8 +8,6 @@ import { useCollection } from '../hooks/useCollection';
 import { MODULES, PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from '../constants/permissions';
 import { useAuth } from '../context/AuthContext';
 import { logAudit, AUDIT_ACTIONS, AUDIT_MODULES } from '../utils/auditLog';
-import { migrateReturnsRentalEndDate } from '../utils/dataMigration';
-import { migrateTransfersToMultiItem } from '../utils/migrateTransfers';
 
 const { Title } = Typography;
 
@@ -32,7 +30,6 @@ const SettingsPage = () => {
     const [addUserForm] = Form.useForm();
     const [changePasswordForm] = Form.useForm();
     const [selfPasswordForm] = Form.useForm();
-    const [migrating, setMigrating] = useState(false);
 
     useEffect(() => {
         const fetchSettings = async () => {
@@ -283,69 +280,6 @@ const SettingsPage = () => {
         setChangePasswordModalVisible(true);
     };
 
-    const handleMigrateReturns = async () => {
-        Modal.confirm({
-            title: 'Migrate Returns Data?',
-            icon: <ExclamationCircleOutlined />,
-            content: 'This will update all existing returns entries to set rental end date equal to return date. This is a one-time migration. Continue?',
-            onOk: async () => {
-                setMigrating(true);
-                try {
-                    const result = await migrateReturnsRentalEndDate();
-                    if (result.success) {
-                        message.success(`Migration complete! Updated ${result.updatedCount} out of ${result.totalCount} returns entries.`);
-                        await logAudit(
-                            AUDIT_MODULES.SETTINGS,
-                            AUDIT_ACTIONS.UPDATE,
-                            `Migrated returns data: Updated ${result.updatedCount} entries to set rental end date = return date`,
-                            { updatedCount: result.updatedCount, totalCount: result.totalCount, skippedCount: result.skippedCount }
-                        );
-                    } else {
-                        message.error(`Migration failed: ${result.error}`);
-                    }
-                } catch (error) {
-                    message.error('Failed to migrate returns data.');
-                } finally {
-                    setMigrating(false);
-                }
-            },
-        });
-    };
-
-    const handleMigrateTransfers = async () => {
-        Modal.confirm({
-            title: 'Migrate Transfer Records?',
-            icon: <ExclamationCircleOutlined />,
-            content: 'This will convert old single-item transfers to the new multi-item format and restore missing perDayRent values from rental orders. This is a one-time migration. Check the browser console for detailed logs. Continue?',
-            onOk: async () => {
-                setMigrating(true);
-                try {
-                    const result = await migrateTransfersToMultiItem();
-                    if (result.success) {
-                        if (result.errors && result.errors.length > 0) {
-                            message.warning(`Migration complete with errors! Migrated ${result.migrated} out of ${result.total} transfers. Check console for details.`);
-                        } else {
-                            message.success(`Migration complete! Migrated ${result.migrated} out of ${result.total} transfers.`);
-                        }
-                        await logAudit(
-                            AUDIT_MODULES.SETTINGS,
-                            AUDIT_ACTIONS.UPDATE,
-                            `Migrated transfer records: Converted ${result.migrated} old single-item transfers to multi-item format`,
-                            { migrated: result.migrated, skipped: result.skipped, total: result.total, errors: result.errors?.length || 0 }
-                        );
-                    } else {
-                        message.error(`Migration failed: ${result.error}`);
-                    }
-                } catch (error) {
-                    message.error('Failed to migrate transfer records.');
-                    console.error('Migration error:', error);
-                } finally {
-                    setMigrating(false);
-                }
-            },
-        });
-    };
-
     const columns = [
         { title: 'Email', dataIndex: 'email', key: 'email' },
         {
@@ -397,8 +331,95 @@ const SettingsPage = () => {
 
     return (
         <>
-            <Row gutter={[24, 24]}>
-                <Col xs={24} lg={12}>
+            <Tabs defaultActiveKey="1">
+                <Tabs.TabPane tab="General Settings" key="1">
+                    <Card title="Company Settings">
+                        <Row gutter={[24, 24]}>
+                            <Col xs={24} md={12}>
+                                <h4>Company Logo URL</h4>
+                                <Input
+                                    placeholder="https://example.com/logo.png"
+                                    value={logoLink}
+                                    onChange={(e) => setLogoLink(e.target.value)}
+                                />
+                                <Button
+                                    type="primary"
+                                    icon={<SaveOutlined />}
+                                    loading={saving}
+                                    onClick={handleSaveLogo}
+                                    style={{ marginTop: '12px' }}
+                                >
+                                    {saving ? 'Saving...' : 'Save Logo'}
+                                </Button>
+                            </Col>
+
+                            <Col xs={24} md={12}>
+                                <h4>GST Configuration</h4>
+                                <Space direction="vertical" style={{ width: '100%' }} size="large">
+                                    <Space align="center">
+                                        <span>Enable GST:</span>
+                                        <Switch checked={gstEnabled} onChange={setGstEnabled} />
+                                    </Space>
+
+                                    {gstEnabled && (
+                                        <>
+                                            <Space direction="vertical" style={{ width: '100%' }}>
+                                                <span>CGST Rate (%):</span>
+                                                <InputNumber
+                                                    min={0}
+                                                    max={100}
+                                                    value={cgstRate}
+                                                    onChange={setCgstRate}
+                                                    style={{ width: '100%' }}
+                                                    precision={2}
+                                                />
+                                            </Space>
+
+                                            <Space direction="vertical" style={{ width: '100%' }}>
+                                                <span>SGST Rate (%):</span>
+                                                <InputNumber
+                                                    min={0}
+                                                    max={100}
+                                                    value={sgstRate}
+                                                    onChange={setSgstRate}
+                                                    style={{ width: '100%' }}
+                                                    precision={2}
+                                                />
+                                            </Space>
+
+                                            <Space direction="vertical" style={{ width: '100%' }}>
+                                                <span>IGST Rate (%) - For Interstate:</span>
+                                                <InputNumber
+                                                    min={0}
+                                                    max={100}
+                                                    value={igstRate}
+                                                    onChange={setIgstRate}
+                                                    style={{ width: '100%' }}
+                                                    precision={2}
+                                                />
+                                            </Space>
+
+                                            <div style={{ color: '#666', fontSize: '12px', fontStyle: 'italic' }}>
+                                                Note: Total GST = CGST + SGST (for local) or IGST (for interstate)
+                                            </div>
+                                        </>
+                                    )}
+
+                                    <Button
+                                        type="primary"
+                                        icon={<SaveOutlined />}
+                                        loading={savingGST}
+                                        onClick={handleSaveGST}
+                                    >
+                                        {savingGST ? 'Saving...' : 'Save GST Settings'}
+                                    </Button>
+                                </Space>
+                            </Col>
+                        </Row>
+                    </Card>
+                </Tabs.TabPane>
+
+                <Tabs.TabPane tab="User Management" key="2">
                     <Card title="User Management">
                         <Button
                             type="primary"
@@ -410,126 +431,9 @@ const SettingsPage = () => {
                         </Button>
                         <Table dataSource={users} columns={columns} loading={loading} rowKey="id" />
                     </Card>
-                </Col>
-                <Col xs={24} lg={12}>
-                    <Card title="Company Settings">
-                        <h4>Company Logo URL</h4>
-                        <Input
-                            placeholder="https://example.com/logo.png"
-                            value={logoLink}
-                            onChange={(e) => setLogoLink(e.target.value)}
-                        />
-                        <Button
-                            type="primary"
-                            icon={<SaveOutlined />}
-                            loading={saving}
-                            onClick={handleSaveLogo}
-                            style={{marginTop: '12px'}}
-                        >
-                            {saving ? 'Saving...' : 'Save Logo'}
-                        </Button>
+                </Tabs.TabPane>
 
-                        <Divider />
-
-                        <h4>GST Configuration</h4>
-                        <Space direction="vertical" style={{ width: '100%' }} size="large">
-                            <Space align="center">
-                                <span>Enable GST:</span>
-                                <Switch checked={gstEnabled} onChange={setGstEnabled} />
-                            </Space>
-
-                            {gstEnabled && (
-                                <>
-                                    <Space direction="vertical" style={{ width: '100%' }}>
-                                        <span>CGST Rate (%):</span>
-                                        <InputNumber
-                                            min={0}
-                                            max={100}
-                                            value={cgstRate}
-                                            onChange={setCgstRate}
-                                            style={{ width: '100%' }}
-                                            precision={2}
-                                        />
-                                    </Space>
-
-                                    <Space direction="vertical" style={{ width: '100%' }}>
-                                        <span>SGST Rate (%):</span>
-                                        <InputNumber
-                                            min={0}
-                                            max={100}
-                                            value={sgstRate}
-                                            onChange={setSgstRate}
-                                            style={{ width: '100%' }}
-                                            precision={2}
-                                        />
-                                    </Space>
-
-                                    <Space direction="vertical" style={{ width: '100%' }}>
-                                        <span>IGST Rate (%) - For Interstate:</span>
-                                        <InputNumber
-                                            min={0}
-                                            max={100}
-                                            value={igstRate}
-                                            onChange={setIgstRate}
-                                            style={{ width: '100%' }}
-                                            precision={2}
-                                        />
-                                    </Space>
-
-                                    <div style={{ color: '#666', fontSize: '12px', fontStyle: 'italic' }}>
-                                        Note: Total GST = CGST + SGST (for local) or IGST (for interstate)
-                                    </div>
-                                </>
-                            )}
-
-                            <Button
-                                type="primary"
-                                icon={<SaveOutlined />}
-                                loading={savingGST}
-                                onClick={handleSaveGST}
-                            >
-                                {savingGST ? 'Saving...' : 'Save GST Settings'}
-                            </Button>
-                        </Space>
-
-                        <Divider />
-
-                        <h4>Data Migration</h4>
-                        <Space direction="vertical" style={{ width: '100%' }} size="large">
-                            <Space direction="vertical" style={{ width: '100%' }}>
-                                <Typography.Text type="secondary">
-                                    <strong>Returns Migration:</strong> Set rental end date equal to return date for all returns.
-                                </Typography.Text>
-                                <Button
-                                    type="default"
-                                    icon={<SyncOutlined />}
-                                    loading={migrating}
-                                    onClick={handleMigrateReturns}
-                                >
-                                    {migrating ? 'Migrating...' : 'Migrate Returns Data'}
-                                </Button>
-                            </Space>
-
-                            <Space direction="vertical" style={{ width: '100%' }}>
-                                <Typography.Text type="secondary">
-                                    <strong>Transfers Migration:</strong> Convert old single-item transfers to multi-item format and restore missing perDayRent values from rental orders.
-                                </Typography.Text>
-                                <Button
-                                    type="default"
-                                    icon={<SyncOutlined />}
-                                    loading={migrating}
-                                    onClick={handleMigrateTransfers}
-                                >
-                                    {migrating ? 'Migrating...' : 'Migrate Transfer Records'}
-                                </Button>
-                            </Space>
-                        </Space>
-                    </Card>
-                </Col>
-            </Row>
-
-            <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-                <Col xs={24}>
+                <Tabs.TabPane tab="My Account" key="3">
                     <Card title="My Account">
                         <Title level={5}>Change Your Password</Title>
                         <Form form={selfPasswordForm} layout="vertical" style={{ maxWidth: 400 }}>
@@ -575,8 +479,8 @@ const SettingsPage = () => {
                             </Form.Item>
                         </Form>
                     </Card>
-                </Col>
-            </Row>
+                </Tabs.TabPane>
+            </Tabs>
 
             <Modal
                 title="Add New User"

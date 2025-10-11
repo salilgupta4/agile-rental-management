@@ -195,10 +195,10 @@ const Dashboard = () => {
                         }
                     }
 
-                    // Calculate rental for still-on-rent portion
+                    // Calculate rental for still-on-rent portion (estimate for full month)
                     if (stillOnRent > 0) {
                         const effectiveStartDate = transfer.rentalStartDate > startOfMonth ? transfer.rentalStartDate : startOfMonth;
-                        const effectiveEndDate = now < endOfMonth ? now : endOfMonth;
+                        const effectiveEndDate = endOfMonth; // Estimate for full month
 
                         if (effectiveStartDate <= effectiveEndDate) {
                             const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);

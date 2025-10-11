@@ -342,10 +342,10 @@ const ReportsPage = () => {
                         }
                     }
 
-                    // Calculate rental for still-on-rent portion
+                    // Calculate rental for still-on-rent portion (estimate for full month)
                     if (stillOnRent > 0) {
                         const effectiveStartDate = transfer.rentalStartDate > startOfMonth ? transfer.rentalStartDate : startOfMonth;
-                        const effectiveEndDate = now < endOfMonth ? now : endOfMonth;
+                        const effectiveEndDate = endOfMonth; // Estimate for full month
 
                         if (effectiveStartDate <= effectiveEndDate) {
                             const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
@@ -615,11 +615,37 @@ const ReportsPage = () => {
                 <Card title="Total Inventory" style={{ marginBottom: 24 }} extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(totalInventoryData, 'total_inventory')}>Export CSV</Button>}>
                     <Table dataSource={totalInventoryData} columns={[
                         { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
-                        { title: 'Product', dataIndex: 'product', key: 'product' },
-                        { title: 'Total Quantity', dataIndex: 'quantity', key: 'quantity' },
-                        { title: 'Unit Cost', dataIndex: 'unitCost', key: 'unitCost', render: (val) => formatCurrency(val), align: 'right' },
-                        { title: 'Total Value', dataIndex: 'totalValue', key: 'totalValue', render: (val) => formatCurrency(val), align: 'right' },
-                    ]} loading={loading} rowKey="key" pagination={false}
+                        {
+                            title: 'Product',
+                            dataIndex: 'product',
+                            key: 'product',
+                            sorter: (a, b) => a.product.localeCompare(b.product),
+                            filters: [...new Set(totalInventoryData.map(item => item.product))].map(p => ({ text: p, value: p })),
+                            onFilter: (value, record) => record.product === value,
+                        },
+                        {
+                            title: 'Total Quantity',
+                            dataIndex: 'quantity',
+                            key: 'quantity',
+                            sorter: (a, b) => a.quantity - b.quantity,
+                        },
+                        {
+                            title: 'Unit Cost',
+                            dataIndex: 'unitCost',
+                            key: 'unitCost',
+                            render: (val) => formatCurrency(val),
+                            align: 'right',
+                            sorter: (a, b) => a.unitCost - b.unitCost,
+                        },
+                        {
+                            title: 'Total Value',
+                            dataIndex: 'totalValue',
+                            key: 'totalValue',
+                            render: (val) => formatCurrency(val),
+                            align: 'right',
+                            sorter: (a, b) => a.totalValue - b.totalValue,
+                        },
+                    ]} loading={loading} rowKey="key" pagination={{ pageSize: 10 }}
                     summary={pageData => {
                         const totalValue = pageData.reduce((sum, item) => sum + item.totalValue, 0);
                         return (
@@ -633,11 +659,37 @@ const ReportsPage = () => {
                 <Card title="Warehouse Inventory" style={{ marginBottom: 24 }} extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(warehouseInventoryData, 'warehouse_inventory')}>Export CSV</Button>}>
                     <Table dataSource={warehouseInventoryData} columns={[
                         { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
-                        { title: 'Product', dataIndex: 'product', key: 'product' },
-                        { title: 'Total Quantity', dataIndex: 'quantity', key: 'quantity' },
-                        { title: 'Unit Cost', dataIndex: 'unitCost', key: 'unitCost', render: (val) => formatCurrency(val), align: 'right' },
-                        { title: 'Total Value', dataIndex: 'totalValue', key: 'totalValue', render: (val) => formatCurrency(val), align: 'right' },
-                    ]} loading={loading} rowKey="key" pagination={false}
+                        {
+                            title: 'Product',
+                            dataIndex: 'product',
+                            key: 'product',
+                            sorter: (a, b) => a.product.localeCompare(b.product),
+                            filters: [...new Set(warehouseInventoryData.map(item => item.product))].map(p => ({ text: p, value: p })),
+                            onFilter: (value, record) => record.product === value,
+                        },
+                        {
+                            title: 'Total Quantity',
+                            dataIndex: 'quantity',
+                            key: 'quantity',
+                            sorter: (a, b) => a.quantity - b.quantity,
+                        },
+                        {
+                            title: 'Unit Cost',
+                            dataIndex: 'unitCost',
+                            key: 'unitCost',
+                            render: (val) => formatCurrency(val),
+                            align: 'right',
+                            sorter: (a, b) => a.unitCost - b.unitCost,
+                        },
+                        {
+                            title: 'Total Value',
+                            dataIndex: 'totalValue',
+                            key: 'totalValue',
+                            render: (val) => formatCurrency(val),
+                            align: 'right',
+                            sorter: (a, b) => a.totalValue - b.totalValue,
+                        },
+                    ]} loading={loading} rowKey="key" pagination={{ pageSize: 10 }}
                     summary={pageData => {
                         const totalValue = pageData.reduce((sum, item) => sum + item.totalValue, 0);
                         return (
@@ -651,11 +703,37 @@ const ReportsPage = () => {
                 <Card title="Inventory with Customers" extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(customerInventoryData, 'customer_inventory')}>Export CSV</Button>}>
                     <Table dataSource={customerInventoryData} columns={[
                         { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
-                        { title: 'Product', dataIndex: 'product', key: 'product' },
-                        { title: 'Total Quantity', dataIndex: 'quantity', key: 'quantity' },
-                        { title: 'Unit Cost', dataIndex: 'unitCost', key: 'unitCost', render: (val) => formatCurrency(val), align: 'right' },
-                        { title: 'Total Value', dataIndex: 'totalValue', key: 'totalValue', render: (val) => formatCurrency(val), align: 'right' },
-                    ]} loading={loading} rowKey="key" pagination={false}
+                        {
+                            title: 'Product',
+                            dataIndex: 'product',
+                            key: 'product',
+                            sorter: (a, b) => a.product.localeCompare(b.product),
+                            filters: [...new Set(customerInventoryData.map(item => item.product))].map(p => ({ text: p, value: p })),
+                            onFilter: (value, record) => record.product === value,
+                        },
+                        {
+                            title: 'Total Quantity',
+                            dataIndex: 'quantity',
+                            key: 'quantity',
+                            sorter: (a, b) => a.quantity - b.quantity,
+                        },
+                        {
+                            title: 'Unit Cost',
+                            dataIndex: 'unitCost',
+                            key: 'unitCost',
+                            render: (val) => formatCurrency(val),
+                            align: 'right',
+                            sorter: (a, b) => a.unitCost - b.unitCost,
+                        },
+                        {
+                            title: 'Total Value',
+                            dataIndex: 'totalValue',
+                            key: 'totalValue',
+                            render: (val) => formatCurrency(val),
+                            align: 'right',
+                            sorter: (a, b) => a.totalValue - b.totalValue,
+                        },
+                    ]} loading={loading} rowKey="key" pagination={{ pageSize: 10 }}
                     summary={pageData => {
                         const totalValue = pageData.reduce((sum, item) => sum + item.totalValue, 0);
                         return (
@@ -671,10 +749,31 @@ const ReportsPage = () => {
                 <Card title="Current Month Rental Summary" style={{ marginBottom: 24 }}>
                     <Table dataSource={monthlyRentSummary} columns={[
                         { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
-                        { title: 'Client Name', dataIndex: 'clientName', key: 'clientName' },
-                        { title: 'Site Name', dataIndex: 'siteName', key: 'siteName' },
-                        { title: 'Rental Value (INR)', dataIndex: 'rentalValue', key: 'rentalValue', render: val => val.toFixed(2) },
-                    ]} loading={loading} rowKey={r => `${r.clientName}-${r.siteName}`} pagination={false}
+                        {
+                            title: 'Client Name',
+                            dataIndex: 'clientName',
+                            key: 'clientName',
+                            sorter: (a, b) => a.clientName.localeCompare(b.clientName),
+                            filters: [...new Set(monthlyRentSummary.map(item => item.clientName))].map(c => ({ text: c, value: c })),
+                            onFilter: (value, record) => record.clientName === value,
+                        },
+                        {
+                            title: 'Site Name',
+                            dataIndex: 'siteName',
+                            key: 'siteName',
+                            sorter: (a, b) => a.siteName.localeCompare(b.siteName),
+                            filters: [...new Set(monthlyRentSummary.map(item => item.siteName))].map(s => ({ text: s, value: s })),
+                            onFilter: (value, record) => record.siteName === value,
+                        },
+                        {
+                            title: 'Rental Value (INR)',
+                            dataIndex: 'rentalValue',
+                            key: 'rentalValue',
+                            render: val => val.toFixed(2),
+                            sorter: (a, b) => a.rentalValue - b.rentalValue,
+                            align: 'right'
+                        },
+                    ]} loading={loading} rowKey={r => `${r.clientName}-${r.siteName}`} pagination={{ pageSize: 10 }}
                     summary={pageData => {
                         const total = pageData.reduce((acc, curr) => acc + curr.rentalValue, 0);
                         return <Table.Summary.Row><Table.Summary.Cell index={0} colSpan={3}><b>Total</b></Table.Summary.Cell><Table.Summary.Cell index={1}><b>{total.toFixed(2)}</b></Table.Summary.Cell></Table.Summary.Row>
@@ -687,12 +786,40 @@ const ReportsPage = () => {
                         <Card title={`Report for ${rentalReportParams.clientName}`} style={{marginTop: 24}} extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(rentalReportData, `rental_report_${rentalReportParams.clientName}`)}>Export CSV</Button>}>
                              <Table dataSource={rentalReportData} columns={[
                                 { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
-                                { title: 'Product', dataIndex: 'product', key: 'product' },
-                                { title: 'Quantity', dataIndex: 'quantity', key: 'quantity' },
-                                { title: 'Rate/Day', dataIndex: 'ratePerDay', key: 'ratePerDay' },
-                                { title: 'No. of Days', dataIndex: 'days', key: 'days' },
-                                { title: 'Total (INR)', dataIndex: 'total', key: 'total' },
-                             ]} pagination={false}
+                                {
+                                    title: 'Product',
+                                    dataIndex: 'product',
+                                    key: 'product',
+                                    sorter: (a, b) => a.product.localeCompare(b.product),
+                                    filters: [...new Set(rentalReportData.map(item => item.product))].map(p => ({ text: p, value: p })),
+                                    onFilter: (value, record) => record.product === value,
+                                },
+                                {
+                                    title: 'Quantity',
+                                    dataIndex: 'quantity',
+                                    key: 'quantity',
+                                    sorter: (a, b) => a.quantity - b.quantity,
+                                },
+                                {
+                                    title: 'Rate/Day',
+                                    dataIndex: 'ratePerDay',
+                                    key: 'ratePerDay',
+                                    sorter: (a, b) => a.ratePerDay - b.ratePerDay,
+                                },
+                                {
+                                    title: 'No. of Days',
+                                    dataIndex: 'days',
+                                    key: 'days',
+                                    sorter: (a, b) => a.days - b.days,
+                                },
+                                {
+                                    title: 'Total (INR)',
+                                    dataIndex: 'total',
+                                    key: 'total',
+                                    sorter: (a, b) => parseFloat(a.total) - parseFloat(b.total),
+                                    align: 'right'
+                                },
+                             ]} pagination={{ pageSize: 10 }}
                              summary={() => (
                                  <Table.Summary.Row>
                                      <Table.Summary.Cell index={0} colSpan={5}><b>Grand Total</b></Table.Summary.Cell>
@@ -713,8 +840,22 @@ const ReportsPage = () => {
                         dataSource={filteredTransactions}
                         columns={[
                             { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1, width: 70 },
-                            { title: 'Date', dataIndex: 'date', key: 'date', render: (date) => formatDate(date), width: 150 },
-                            { title: 'Type', dataIndex: 'type', key: 'type', width: 100 },
+                            {
+                                title: 'Date',
+                                dataIndex: 'date',
+                                key: 'date',
+                                render: (date) => formatDate(date),
+                                sorter: (a, b) => a.date - b.date,
+                                width: 150
+                            },
+                            {
+                                title: 'Type',
+                                dataIndex: 'type',
+                                key: 'type',
+                                filters: [...new Set(filteredTransactions.map(item => item.type))].map(t => ({ text: t, value: t })),
+                                onFilter: (value, record) => record.type === value,
+                                width: 100
+                            },
                             { title: 'Reference', key: 'reference', render: (_, rec) => rec.reference || 'N/A', width: 120 },
                             { title: 'Description', key: 'description', render: (_, rec) => rec.description || 'N/A', width: 200 },
                             {
@@ -782,6 +923,7 @@ const ReportsPage = () => {
                         rowKey={r => r.id + r.type}
                         style={{marginTop: 24}}
                         scroll={{ x: 1600 }}
+                        pagination={{ pageSize: 20 }}
                      />
                  </Card>
             </Tabs.TabPane>
