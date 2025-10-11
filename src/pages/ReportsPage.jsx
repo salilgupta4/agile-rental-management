@@ -221,76 +221,124 @@ const ReportsPage = () => {
         const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
         // Build a map of returned quantities by customer/product with rental end dates
-        const returnedQuantities = {}; // { customer: { product: { totalReturned, latestRentalEndDate } } }
+        const returnsByCustomerProduct = {}; // { customer: { product: [{ quantity, rentalEndDate, returnDate }, ...] } }
         returns.forEach(r => {
-            if (!returnedQuantities[r.customer]) returnedQuantities[r.customer] = {};
+            if (!returnsByCustomerProduct[r.customer]) returnsByCustomerProduct[r.customer] = {};
 
             const items = r.items || (r.product ? [{ product: r.product, quantity: r.quantity }] : []);
             items.forEach(item => {
-                if (!returnedQuantities[r.customer][item.product]) {
-                    returnedQuantities[r.customer][item.product] = { totalReturned: 0, latestRentalEndDate: null };
+                if (!returnsByCustomerProduct[r.customer][item.product]) {
+                    returnsByCustomerProduct[r.customer][item.product] = [];
                 }
-                returnedQuantities[r.customer][item.product].totalReturned += Number(item.quantity);
-
-                if (r.rentalEndDate) {
-                    const currentEndDate = returnedQuantities[r.customer][item.product].latestRentalEndDate;
-                    if (!currentEndDate || new Date(r.rentalEndDate) > new Date(currentEndDate)) {
-                        returnedQuantities[r.customer][item.product].latestRentalEndDate = r.rentalEndDate;
-                    }
-                }
+                returnsByCustomerProduct[r.customer][item.product].push({
+                    quantity: Number(item.quantity),
+                    rentalEndDate: r.rentalEndDate ? new Date(r.rentalEndDate) : null,
+                    returnDate: new Date(r.returnDate)
+                });
             });
         });
 
-        // Calculate rental for all transfers
+        // Sort returns by date (earliest first) for FIFO allocation
+        for (const customer in returnsByCustomerProduct) {
+            for (const product in returnsByCustomerProduct[customer]) {
+                returnsByCustomerProduct[customer][product].sort((a, b) => a.returnDate - b.returnDate);
+            }
+        }
+
+        // Group transfers by customer+product and sort by date (FIFO)
+        const transfersByCustomerProduct = {};
         transfers.filter(t => t.status === 'Rented').forEach(t => {
+            if (!transfersByCustomerProduct[t.customer]) transfersByCustomerProduct[t.customer] = {};
+
             const items = t.items || (t.product ? [{ product: t.product, quantity: t.quantity, perDayRent: t.perDayRent }] : []);
-
             items.forEach(item => {
-                const transferredQty = Number(item.quantity);
-                const returnedQty = returnedQuantities[t.customer]?.[item.product]?.totalReturned || 0;
-                const rentalEndDate = returnedQuantities[t.customer]?.[item.product]?.latestRentalEndDate;
-
-                let itemRental = 0;
-
-                // Calculate rental for returned portion
-                if (returnedQty > 0 && rentalEndDate) {
-                    const rentalStartDate = new Date(t.rentalStartDate);
-                    const endDate = new Date(rentalEndDate);
-
-                    const effectiveStartDate = rentalStartDate > startOfMonth ? rentalStartDate : startOfMonth;
-                    const effectiveEndDate = endDate < endOfMonth ? endDate : endOfMonth;
-
-                    if (effectiveStartDate <= effectiveEndDate && effectiveEndDate >= startOfMonth) {
-                        const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
-                        const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                        itemRental += returnedQty * Number(item.perDayRent || 0) * days;
-                    }
+                if (!transfersByCustomerProduct[t.customer][item.product]) {
+                    transfersByCustomerProduct[t.customer][item.product] = [];
                 }
-
-                // Calculate rental for still-on-rent portion
-                const stillOnRent = transferredQty - returnedQty;
-                if (stillOnRent > 0) {
-                    const rentalStartDate = new Date(t.rentalStartDate);
-
-                    const effectiveStartDate = rentalStartDate > startOfMonth ? rentalStartDate : startOfMonth;
-                    const effectiveEndDate = now < endOfMonth ? now : endOfMonth;
-
-                    if (effectiveStartDate <= effectiveEndDate) {
-                        const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
-                        const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                        itemRental += stillOnRent * Number(item.perDayRent || 0) * days;
-                    }
-                }
-
-                if (itemRental > 0) {
-                    const key = `${t.customer}-${t.site}`;
-                    if (!summary[key]) {
-                        summary[key] = { clientName: t.customer, siteName: t.site, rentalValue: 0 };
-                    }
-                    summary[key].rentalValue += itemRental;
-                }
+                transfersByCustomerProduct[t.customer][item.product].push({
+                    customer: t.customer,
+                    site: t.site,
+                    quantity: Number(item.quantity),
+                    perDayRent: Number(item.perDayRent || 0),
+                    rentalStartDate: new Date(t.rentalStartDate)
+                });
             });
         });
+
+        // Sort transfers by rental start date (FIFO)
+        for (const customer in transfersByCustomerProduct) {
+            for (const product in transfersByCustomerProduct[customer]) {
+                transfersByCustomerProduct[customer][product].sort((a, b) => a.rentalStartDate - b.rentalStartDate);
+            }
+        }
+
+        // Calculate rental for each customer+product combination
+        for (const customer in transfersByCustomerProduct) {
+            for (const product in transfersByCustomerProduct[customer]) {
+                const transferList = transfersByCustomerProduct[customer][product];
+                const returnList = returnsByCustomerProduct[customer]?.[product] || [];
+
+                let totalReturnedQty = 0;
+                let latestRentalEndDate = null;
+
+                // Calculate total returns and latest rental end date
+                returnList.forEach(ret => {
+                    totalReturnedQty += ret.quantity;
+                    if (ret.rentalEndDate && (!latestRentalEndDate || ret.rentalEndDate > latestRentalEndDate)) {
+                        latestRentalEndDate = ret.rentalEndDate;
+                    }
+                });
+
+                // Allocate returns to transfers using FIFO
+                let remainingReturns = totalReturnedQty;
+
+                transferList.forEach(transfer => {
+                    let returnedFromThisTransfer = 0;
+                    let stillOnRent = transfer.quantity;
+
+                    if (remainingReturns > 0) {
+                        returnedFromThisTransfer = Math.min(remainingReturns, transfer.quantity);
+                        stillOnRent = transfer.quantity - returnedFromThisTransfer;
+                        remainingReturns -= returnedFromThisTransfer;
+                    }
+
+                    let itemRental = 0;
+
+                    // Calculate rental for returned portion
+                    if (returnedFromThisTransfer > 0 && latestRentalEndDate) {
+                        const effectiveStartDate = transfer.rentalStartDate > startOfMonth ? transfer.rentalStartDate : startOfMonth;
+                        const effectiveEndDate = latestRentalEndDate < endOfMonth ? latestRentalEndDate : endOfMonth;
+
+                        if (effectiveStartDate <= effectiveEndDate && effectiveEndDate >= startOfMonth) {
+                            const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
+                            const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                            itemRental += returnedFromThisTransfer * transfer.perDayRent * days;
+                        }
+                    }
+
+                    // Calculate rental for still-on-rent portion
+                    if (stillOnRent > 0) {
+                        const effectiveStartDate = transfer.rentalStartDate > startOfMonth ? transfer.rentalStartDate : startOfMonth;
+                        const effectiveEndDate = now < endOfMonth ? now : endOfMonth;
+
+                        if (effectiveStartDate <= effectiveEndDate) {
+                            const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
+                            const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                            itemRental += stillOnRent * transfer.perDayRent * days;
+                        }
+                    }
+
+                    if (itemRental > 0) {
+                        const key = `${transfer.customer}-${transfer.site}`;
+                        if (!summary[key]) {
+                            summary[key] = { clientName: transfer.customer, siteName: transfer.site, rentalValue: 0 };
+                        }
+                        summary[key].rentalValue += itemRental;
+                    }
+                });
+            }
+        }
+
         return Object.values(summary).filter(s => s.rentalValue > 0);
     }, [transfers, returns]);
 
@@ -305,67 +353,102 @@ const ReportsPage = () => {
         const periodStartDate = start.startOf('day').toDate();
         const periodEndDate = end.endOf('day').toDate();
 
-        // Build a map of returned quantities by customer/product with rental end dates
-        const returnedQuantities = {}; // { product: { totalReturned, latestRentalEndDate } }
+        // Build a map of returns by product with rental end dates
+        const returnsByProduct = {}; // { product: [{ quantity, rentalEndDate, returnDate }, ...] }
         returns.filter(r => r.customer === clientName).forEach(r => {
             const items = r.items || (r.product ? [{ product: r.product, quantity: r.quantity }] : []);
             items.forEach(item => {
-                if (!returnedQuantities[item.product]) {
-                    returnedQuantities[item.product] = { totalReturned: 0, latestRentalEndDate: null };
+                if (!returnsByProduct[item.product]) {
+                    returnsByProduct[item.product] = [];
                 }
-                returnedQuantities[item.product].totalReturned += Number(item.quantity);
-
-                if (r.rentalEndDate) {
-                    const currentEndDate = returnedQuantities[item.product].latestRentalEndDate;
-                    if (!currentEndDate || new Date(r.rentalEndDate) > new Date(currentEndDate)) {
-                        returnedQuantities[item.product].latestRentalEndDate = r.rentalEndDate;
-                    }
-                }
+                returnsByProduct[item.product].push({
+                    quantity: Number(item.quantity),
+                    rentalEndDate: r.rentalEndDate ? new Date(r.rentalEndDate) : null,
+                    returnDate: new Date(r.returnDate)
+                });
             });
         });
 
-        const clientTransfers = transfers.filter(t =>
-            t.customer === clientName &&
-            (!siteName || t.site === siteName)
-        );
+        // Sort returns by date (earliest first) for FIFO allocation
+        for (const product in returnsByProduct) {
+            returnsByProduct[product].sort((a, b) => a.returnDate - b.returnDate);
+        }
 
-        // Collect all items with their billing details
+        // Get and group client transfers by product, sorted by rental start date (FIFO)
+        const transfersByProduct = {};
+        transfers
+            .filter(t => t.customer === clientName && (!siteName || t.site === siteName))
+            .forEach(t => {
+                const items = t.items || (t.product ? [{ product: t.product, quantity: t.quantity, perDayRent: t.perDayRent }] : []);
+                items.forEach(item => {
+                    if (!transfersByProduct[item.product]) {
+                        transfersByProduct[item.product] = [];
+                    }
+                    transfersByProduct[item.product].push({
+                        quantity: Number(item.quantity),
+                        perDayRent: Number(item.perDayRent || 0),
+                        rentalStartDate: new Date(t.rentalStartDate)
+                    });
+                });
+            });
+
+        // Sort transfers by rental start date (FIFO)
+        for (const product in transfersByProduct) {
+            transfersByProduct[product].sort((a, b) => a.rentalStartDate - b.rentalStartDate);
+        }
+
+        // Collect all items with their billing details using FIFO allocation
         const itemsWithDetails = [];
-        clientTransfers.forEach((t) => {
-            const items = t.items || (t.product ? [{ product: t.product, quantity: t.quantity, perDayRent: t.perDayRent }] : []);
 
-            items.forEach((item) => {
-                const transferredQty = Number(item.quantity);
-                const returnedQty = returnedQuantities[item.product]?.totalReturned || 0;
-                const rentalEndDate = returnedQuantities[item.product]?.latestRentalEndDate;
+        for (const product in transfersByProduct) {
+            const transferList = transfersByProduct[product];
+            const returnList = returnsByProduct[product] || [];
+
+            let totalReturnedQty = 0;
+            let latestRentalEndDate = null;
+
+            // Calculate total returns and latest rental end date
+            returnList.forEach(ret => {
+                totalReturnedQty += ret.quantity;
+                if (ret.rentalEndDate && (!latestRentalEndDate || ret.rentalEndDate > latestRentalEndDate)) {
+                    latestRentalEndDate = ret.rentalEndDate;
+                }
+            });
+
+            // Allocate returns to transfers using FIFO
+            let remainingReturns = totalReturnedQty;
+
+            transferList.forEach(transfer => {
+                let returnedFromThisTransfer = 0;
+                let stillOnRent = transfer.quantity;
+
+                if (remainingReturns > 0) {
+                    returnedFromThisTransfer = Math.min(remainingReturns, transfer.quantity);
+                    stillOnRent = transfer.quantity - returnedFromThisTransfer;
+                    remainingReturns -= returnedFromThisTransfer;
+                }
 
                 // Calculate rental for returned portion
-                if (returnedQty > 0 && rentalEndDate) {
-                    const rentalStartDate = new Date(t.rentalStartDate);
-                    const endDate = new Date(rentalEndDate);
-
-                    const effectiveStartDate = rentalStartDate > periodStartDate ? rentalStartDate : periodStartDate;
-                    const effectiveEndDate = endDate < periodEndDate ? endDate : periodEndDate;
+                if (returnedFromThisTransfer > 0 && latestRentalEndDate) {
+                    const effectiveStartDate = transfer.rentalStartDate > periodStartDate ? transfer.rentalStartDate : periodStartDate;
+                    const effectiveEndDate = latestRentalEndDate < periodEndDate ? latestRentalEndDate : periodEndDate;
 
                     if (effectiveStartDate <= effectiveEndDate) {
                         const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
                         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
                         itemsWithDetails.push({
-                            product: item.product,
-                            quantity: returnedQty,
-                            ratePerDay: Number(item.perDayRent),
+                            product: product,
+                            quantity: returnedFromThisTransfer,
+                            ratePerDay: transfer.perDayRent,
                             days: diffDays
                         });
                     }
                 }
 
                 // Calculate rental for still-on-rent portion
-                const stillOnRent = transferredQty - returnedQty;
                 if (stillOnRent > 0) {
-                    const rentalStartDate = new Date(t.rentalStartDate);
-
-                    const effectiveStartDate = rentalStartDate > periodStartDate ? rentalStartDate : periodStartDate;
+                    const effectiveStartDate = transfer.rentalStartDate > periodStartDate ? transfer.rentalStartDate : periodStartDate;
                     const effectiveEndDate = periodEndDate;
 
                     if (effectiveStartDate <= effectiveEndDate) {
@@ -373,15 +456,15 @@ const ReportsPage = () => {
                         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
                         itemsWithDetails.push({
-                            product: item.product,
+                            product: product,
                             quantity: stillOnRent,
-                            ratePerDay: Number(item.perDayRent),
+                            ratePerDay: transfer.perDayRent,
                             days: diffDays
                         });
                     }
                 }
             });
-        });
+        }
 
         // Group by product, ratePerDay, and days
         const groupedItems = {};
