@@ -220,6 +220,20 @@ const ReportsPage = () => {
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
+        // Build a map of rental rates from rental orders for fallback
+        const rentalRatesByCustomerProduct = {};
+        rentalOrders.forEach(order => {
+            const key = `${order.customerName}-${order.siteName}`;
+            if (!rentalRatesByCustomerProduct[key]) {
+                rentalRatesByCustomerProduct[key] = {};
+            }
+            (order.items || []).forEach(item => {
+                if (item.perDayRent && !rentalRatesByCustomerProduct[key][item.product]) {
+                    rentalRatesByCustomerProduct[key][item.product] = item.perDayRent;
+                }
+            });
+        });
+
         // Build a map of returned quantities by customer/product with rental end dates
         const returnsByCustomerProduct = {}; // { customer: { product: [{ quantity, rentalEndDate, returnDate }, ...] } }
         returns.forEach(r => {
@@ -255,11 +269,22 @@ const ReportsPage = () => {
                 if (!transfersByCustomerProduct[t.customer][item.product]) {
                     transfersByCustomerProduct[t.customer][item.product] = [];
                 }
+
+                // Get perDayRent with fallback to rental order rates
+                let perDayRent = Number(item.perDayRent || 0);
+                if (perDayRent === 0) {
+                    const orderKey = `${t.customer}-${t.site}`;
+                    perDayRent = Number(rentalRatesByCustomerProduct[orderKey]?.[item.product] || 0);
+                    if (perDayRent === 0) {
+                        console.warn(`Missing perDayRent for ${item.product} in transfer to ${t.customer}/${t.site}`);
+                    }
+                }
+
                 transfersByCustomerProduct[t.customer][item.product].push({
                     customer: t.customer,
                     site: t.site,
                     quantity: Number(item.quantity),
-                    perDayRent: Number(item.perDayRent || 0),
+                    perDayRent: perDayRent,
                     rentalStartDate: new Date(t.rentalStartDate)
                 });
             });
@@ -340,7 +365,7 @@ const ReportsPage = () => {
         }
 
         return Object.values(summary).filter(s => s.rentalValue > 0);
-    }, [transfers, returns]);
+    }, [transfers, returns, rentalOrders]);
 
     const handleGenerateRentalReport = (values) => {
         const { clientName, siteName, dateRange } = values;

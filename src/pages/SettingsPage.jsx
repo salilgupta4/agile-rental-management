@@ -9,6 +9,7 @@ import { MODULES, PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from '../constants/per
 import { useAuth } from '../context/AuthContext';
 import { logAudit, AUDIT_ACTIONS, AUDIT_MODULES } from '../utils/auditLog';
 import { migrateReturnsRentalEndDate } from '../utils/dataMigration';
+import { migrateTransfersToMultiItem } from '../utils/migrateTransfers';
 
 const { Title } = Typography;
 
@@ -311,6 +312,40 @@ const SettingsPage = () => {
         });
     };
 
+    const handleMigrateTransfers = async () => {
+        Modal.confirm({
+            title: 'Migrate Transfer Records?',
+            icon: <ExclamationCircleOutlined />,
+            content: 'This will convert old single-item transfers to the new multi-item format and restore missing perDayRent values from rental orders. This is a one-time migration. Check the browser console for detailed logs. Continue?',
+            onOk: async () => {
+                setMigrating(true);
+                try {
+                    const result = await migrateTransfersToMultiItem();
+                    if (result.success) {
+                        if (result.errors && result.errors.length > 0) {
+                            message.warning(`Migration complete with errors! Migrated ${result.migrated} out of ${result.total} transfers. Check console for details.`);
+                        } else {
+                            message.success(`Migration complete! Migrated ${result.migrated} out of ${result.total} transfers.`);
+                        }
+                        await logAudit(
+                            AUDIT_MODULES.SETTINGS,
+                            AUDIT_ACTIONS.UPDATE,
+                            `Migrated transfer records: Converted ${result.migrated} old single-item transfers to multi-item format`,
+                            { migrated: result.migrated, skipped: result.skipped, total: result.total, errors: result.errors?.length || 0 }
+                        );
+                    } else {
+                        message.error(`Migration failed: ${result.error}`);
+                    }
+                } catch (error) {
+                    message.error('Failed to migrate transfer records.');
+                    console.error('Migration error:', error);
+                } finally {
+                    setMigrating(false);
+                }
+            },
+        });
+    };
+
     const columns = [
         { title: 'Email', dataIndex: 'email', key: 'email' },
         {
@@ -460,18 +495,34 @@ const SettingsPage = () => {
                         <Divider />
 
                         <h4>Data Migration</h4>
-                        <Space direction="vertical" style={{ width: '100%' }}>
-                            <Typography.Text type="secondary">
-                                Migrate existing returns data to set rental end date equal to return date.
-                            </Typography.Text>
-                            <Button
-                                type="default"
-                                icon={<SyncOutlined />}
-                                loading={migrating}
-                                onClick={handleMigrateReturns}
-                            >
-                                {migrating ? 'Migrating...' : 'Migrate Returns Data'}
-                            </Button>
+                        <Space direction="vertical" style={{ width: '100%' }} size="large">
+                            <Space direction="vertical" style={{ width: '100%' }}>
+                                <Typography.Text type="secondary">
+                                    <strong>Returns Migration:</strong> Set rental end date equal to return date for all returns.
+                                </Typography.Text>
+                                <Button
+                                    type="default"
+                                    icon={<SyncOutlined />}
+                                    loading={migrating}
+                                    onClick={handleMigrateReturns}
+                                >
+                                    {migrating ? 'Migrating...' : 'Migrate Returns Data'}
+                                </Button>
+                            </Space>
+
+                            <Space direction="vertical" style={{ width: '100%' }}>
+                                <Typography.Text type="secondary">
+                                    <strong>Transfers Migration:</strong> Convert old single-item transfers to multi-item format and restore missing perDayRent values from rental orders.
+                                </Typography.Text>
+                                <Button
+                                    type="default"
+                                    icon={<SyncOutlined />}
+                                    loading={migrating}
+                                    onClick={handleMigrateTransfers}
+                                >
+                                    {migrating ? 'Migrating...' : 'Migrate Transfer Records'}
+                                </Button>
+                            </Space>
                         </Space>
                     </Card>
                 </Col>

@@ -50,10 +50,32 @@ const TransfersPage = () => {
                 return order.customerName === editingRecord.customer && order.siteName === editingRecord.site && totalDelivered < totalOrdered;
             });
             setOpenOrders(relatedOrders);
+
+            // Convert old single-item structure to multi-item array for editing
+            let items = editingRecord.items;
+            if (!items || items.length === 0) {
+                // Old structure - convert to array
+                if (editingRecord.product) {
+                    items = [{
+                        product: editingRecord.product,
+                        quantity: editingRecord.quantity,
+                        perDayRent: editingRecord.perDayRent
+                    }];
+                } else {
+                    items = [{}];
+                }
+            }
+
             form.setFieldsValue({
-                ...editingRecord,
+                dcNumber: editingRecord.dcNumber,
+                customer: editingRecord.customer,
+                site: editingRecord.site,
+                from: editingRecord.from,
+                workOrderNumber: editingRecord.workOrderNumber,
+                rentalOrderId: editingRecord.rentalOrderId,
                 transferDate: editingRecord.transferDate ? dayjs(editingRecord.transferDate) : null,
                 rentalStartDate: editingRecord.rentalStartDate ? dayjs(editingRecord.rentalStartDate) : null,
+                items: items
             });
         }
     }, [editingRecord, isModalVisible, form, customers, rentalOrders]);

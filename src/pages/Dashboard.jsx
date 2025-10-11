@@ -27,6 +27,20 @@ const Dashboard = () => {
             pendingOrders: 0
         };
 
+        // Build a map of rental rates from rental orders for fallback
+        const rentalRatesByCustomerProduct = {};
+        rentalOrders.forEach(order => {
+            const key = `${order.customerName}-${order.siteName}`;
+            if (!rentalRatesByCustomerProduct[key]) {
+                rentalRatesByCustomerProduct[key] = {};
+            }
+            (order.items || []).forEach(item => {
+                if (item.perDayRent && !rentalRatesByCustomerProduct[key][item.product]) {
+                    rentalRatesByCustomerProduct[key][item.product] = item.perDayRent;
+                }
+            });
+        });
+
         // Calculate average unit cost for each product based on purchases
         const avgProductPrice = {};
         const productPricing = {};
@@ -111,9 +125,20 @@ const Dashboard = () => {
                 if (!transfersByCustomerProduct[t.customer][item.product]) {
                     transfersByCustomerProduct[t.customer][item.product] = [];
                 }
+
+                // Get perDayRent with fallback to rental order rates
+                let perDayRent = Number(item.perDayRent || 0);
+                if (perDayRent === 0) {
+                    const orderKey = `${t.customer}-${t.site}`;
+                    perDayRent = Number(rentalRatesByCustomerProduct[orderKey]?.[item.product] || 0);
+                    if (perDayRent === 0) {
+                        console.warn(`Missing perDayRent for ${item.product} in transfer to ${t.customer}/${t.site}`);
+                    }
+                }
+
                 transfersByCustomerProduct[t.customer][item.product].push({
                     quantity: Number(item.quantity),
-                    perDayRent: Number(item.perDayRent || 0),
+                    perDayRent: perDayRent,
                     rentalStartDate: new Date(t.rentalStartDate)
                 });
             });
