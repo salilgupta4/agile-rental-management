@@ -76,54 +76,68 @@ const Dashboard = () => {
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
-        // Create a map of rental end dates from returns
-        const rentalEndDates = {};
+        // Build a map of returned quantities by customer/product with rental end dates
+        const returnedQuantities = {}; // { customer: { product: { totalReturned, latestRentalEndDate } } }
         returns.forEach(r => {
-            if (r.rentalEndDate) {
-                const key = `${r.customer}`;
-                if (!rentalEndDates[key] || new Date(r.rentalEndDate) > new Date(rentalEndDates[key])) {
-                    rentalEndDates[key] = r.rentalEndDate;
+            if (!returnedQuantities[r.customer]) returnedQuantities[r.customer] = {};
+
+            const items = r.items || (r.product ? [{ product: r.product, quantity: r.quantity }] : []);
+            items.forEach(item => {
+                if (!returnedQuantities[r.customer][item.product]) {
+                    returnedQuantities[r.customer][item.product] = { totalReturned: 0, latestRentalEndDate: null };
                 }
-            }
+                returnedQuantities[r.customer][item.product].totalReturned += Number(item.quantity);
+
+                // Keep the latest rental end date for this product
+                if (r.rentalEndDate) {
+                    const currentEndDate = returnedQuantities[r.customer][item.product].latestRentalEndDate;
+                    if (!currentEndDate || new Date(r.rentalEndDate) > new Date(currentEndDate)) {
+                        returnedQuantities[r.customer][item.product].latestRentalEndDate = r.rentalEndDate;
+                    }
+                }
+            });
         });
 
-        // Filter only active rentals (status = 'Rented') that haven't ended yet
-        const activeTransfers = transfers.filter(t => {
-            if (t.status !== 'Rented') return false;
-
-            // Check if this rental has ended
-            const rentalEndDate = rentalEndDates[t.customer];
-            if (rentalEndDate && new Date(rentalEndDate) < startOfMonth) {
-                return false; // Rental ended before this month
-            }
-
-            return true;
-        });
-
+        // Calculate rental for all transfers
         let monthlyValue = 0;
 
-        activeTransfers.forEach(t => {
-            // Handle both old single-item and new multi-item structure
+        transfers.filter(t => t.status === 'Rented').forEach(t => {
             const items = t.items || (t.product ? [{ product: t.product, quantity: t.quantity, perDayRent: t.perDayRent }] : []);
 
             items.forEach(item => {
-                const rentalStartDate = new Date(t.rentalStartDate);
-                const rentalEndDate = rentalEndDates[t.customer] ? new Date(rentalEndDates[t.customer]) : now;
+                const transferredQty = Number(item.quantity);
+                const returnedQty = returnedQuantities[t.customer]?.[item.product]?.totalReturned || 0;
+                const rentalEndDate = returnedQuantities[t.customer]?.[item.product]?.latestRentalEndDate;
 
-                // Calculate effective start date (later of rental start or month start)
-                const effectiveStartDate = rentalStartDate > startOfMonth ? rentalStartDate : startOfMonth;
+                // Calculate rental for returned portion (if any)
+                if (returnedQty > 0 && rentalEndDate) {
+                    const rentalStartDate = new Date(t.rentalStartDate);
+                    const endDate = new Date(rentalEndDate);
 
-                // Calculate effective end date (earlier of rental end or month end)
-                const effectiveEndDate = rentalEndDate < endOfMonth ? rentalEndDate : endOfMonth;
+                    const effectiveStartDate = rentalStartDate > startOfMonth ? rentalStartDate : startOfMonth;
+                    const effectiveEndDate = endDate < endOfMonth ? endDate : endOfMonth;
 
-                // If rental started after current month or ended before current month, skip it
-                if (effectiveStartDate > endOfMonth || effectiveEndDate < startOfMonth) return;
+                    if (effectiveStartDate <= effectiveEndDate && effectiveEndDate >= startOfMonth) {
+                        const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
+                        const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                        monthlyValue += returnedQty * Number(item.perDayRent || 0) * days;
+                    }
+                }
 
-                // Calculate days in current month for this rental
-                const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
-                const daysInCurrentMonth = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                // Calculate rental for still-on-rent portion
+                const stillOnRent = transferredQty - returnedQty;
+                if (stillOnRent > 0) {
+                    const rentalStartDate = new Date(t.rentalStartDate);
 
-                monthlyValue += Number(item.quantity || 0) * Number(item.perDayRent || 0) * daysInCurrentMonth;
+                    const effectiveStartDate = rentalStartDate > startOfMonth ? rentalStartDate : startOfMonth;
+                    const effectiveEndDate = now < endOfMonth ? now : endOfMonth;
+
+                    if (effectiveStartDate <= effectiveEndDate) {
+                        const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
+                        const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                        monthlyValue += stillOnRent * Number(item.perDayRent || 0) * days;
+                    }
+                }
             });
         });
 
