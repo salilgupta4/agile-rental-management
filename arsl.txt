@@ -1,0 +1,2233 @@
+import React, { useState, useEffect, createContext, useContext, useMemo } from 'react';
+import { App as AntApp, Layout, Menu, Form, Input, Button, Select, DatePicker, Table, Card, Row, Col, Statistic, Modal, message, Space, InputNumber, Divider, ConfigProvider, Radio, Tabs, Tag, Dropdown } from 'antd';
+import {
+    HomeOutlined,
+    ShoppingOutlined,
+    SwapOutlined,
+    UserOutlined,
+    BarChartOutlined,
+    LogoutOutlined,
+    BuildOutlined,
+    ToolOutlined,
+    UsergroupAddOutlined,
+    DollarCircleOutlined,
+    SettingOutlined,
+    SaveOutlined,
+    MinusCircleOutlined,
+    PlusOutlined,
+    EditOutlined,
+    DeleteOutlined,
+    ExclamationCircleOutlined,
+    FileDoneOutlined,
+    FileExcelOutlined,
+    DownOutlined
+} from '@ant-design/icons';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, reauthenticateWithCredential, EmailAuthProvider, updatePassword } from 'firebase/auth';
+import { getFirestore, collection, addDoc, getDocs, doc, setDoc, query, onSnapshot, updateDoc, getDoc, deleteDoc, runTransaction, where } from 'firebase/firestore';
+import { getStorage } from "firebase/storage";
+import { setLogLevel } from "firebase/firestore";
+
+
+// --- Firebase Configuration ---
+// IMPORTANT: Replace with your actual Firebase config
+const firebaseConfig = {
+      apiKey: "AIzaSyC7-GvsRmFXuZlPlmdS6q6s6s_bneDq0J4",
+  authDomain: "arsl-10c34.firebaseapp.com",
+  projectId: "arsl-10c34",
+  storageBucket: "arsl-10c34.appspot.com",
+  messagingSenderId: "955107233335",
+  appId: "1:955107233335:web:d48364a4d066fe07c3f9b2",
+  measurementId: "G-7L2X09TZKD"
+};
+
+// --- Initialize Firebase ---
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const storage = getStorage(app);
+setLogLevel('debug');
+
+// --- Constants ---
+const UOM_OPTIONS = ["Nos", "Kgs", "Sft", "SQM", "Rft", "Rmt"];
+
+// --- Authentication Context ---
+const AuthContext = createContext();
+
+const AuthProvider = ({ children }) => {
+    const [user, setUser] = useState(null);
+    const [userRole, setUserRole] = useState('viewer'); // Default role
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+            if (firebaseUser) {
+                const userDocRef = doc(db, "users", firebaseUser.uid);
+                const unsubscribeSnapshot = onSnapshot(userDocRef, (doc) => {
+                    if (doc.exists()) {
+                        setUser({ ...firebaseUser, ...doc.data() });
+                        setUserRole(doc.data().role);
+                    } else {
+                        setUser(firebaseUser);
+                        setUserRole('viewer');
+                    }
+                    setLoading(false);
+                });
+                return () => unsubscribeSnapshot();
+            } else {
+                setUser(null);
+                setUserRole('viewer');
+                setLoading(false);
+            }
+        });
+
+        return () => unsubscribe();
+    }, []);
+
+    const value = { user, userRole, loading };
+
+    return (
+        <AuthContext.Provider value={value}>
+            {!loading && children}
+        </AuthContext.Provider>
+    );
+};
+
+const useAuth = () => {
+    return useContext(AuthContext);
+};
+
+// --- Custom Hooks ---
+const useCollection = (collectionName) => {
+    const [data, setData] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const q = query(collection(db, collectionName));
+        const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            const items = [];
+            querySnapshot.forEach((doc) => {
+                items.push({ id: doc.id, ...doc.data() });
+            });
+            setData(items);
+            setLoading(false);
+        }, (error) => {
+            console.error("Error fetching collection: ", error);
+            message.error(`Failed to fetch ${collectionName}.`);
+            setLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, [collectionName]);
+
+    return { data, loading };
+};
+
+const useInventory = () => {
+    const { data: purchases, loading: purchasesLoading } = useCollection('purchases');
+    const { data: transfers, loading: transfersLoading } = useCollection('transfers');
+    const { data: returns, loading: returnsLoading } = useCollection('returns');
+    const { data: sales, loading: salesLoading } = useCollection('sales');
+
+    const inventory = useMemo(() => {
+        const stock = {}; // { warehouse: { product: quantity } }
+
+        purchases.forEach(purchase => {
+            const warehouse = purchase.warehouse;
+            if (!stock[warehouse]) stock[warehouse] = {};
+            (purchase.items || []).forEach(item => {
+                stock[warehouse][item.product] = (stock[warehouse][item.product] || 0) + Number(item.quantity);
+            });
+        });
+
+        transfers.forEach(transfer => {
+            const warehouse = transfer.from;
+            if (stock[warehouse] && stock[warehouse][transfer.product]) {
+                stock[warehouse][transfer.product] -= Number(transfer.quantity);
+            }
+        });
+
+        returns.forEach(ret => {
+            const warehouse = ret.returnTo;
+            if (!stock[warehouse]) stock[warehouse] = {};
+            stock[warehouse][ret.product] = (stock[warehouse][ret.product] || 0) + Number(ret.quantity);
+        });
+        
+        sales.forEach(sale => {
+            if(sale.fromWarehouse && stock[sale.fromWarehouse] && stock[sale.fromWarehouse][sale.product]) {
+                 stock[sale.fromWarehouse][sale.product] -= Number(sale.quantity);
+            }
+        });
+
+        return stock;
+    }, [purchases, transfers, returns, sales]);
+
+    const customerInventory = useMemo(() => {
+        const onSite = {}; // { customer: { site: { product: quantity } } }
+
+        transfers.forEach(t => {
+            if (!onSite[t.customer]) onSite[t.customer] = {};
+            if (!onSite[t.customer][t.site]) onSite[t.customer][t.site] = {};
+            onSite[t.customer][t.site][t.product] = (onSite[t.customer][t.site][t.product] || 0) + Number(t.quantity);
+        });
+
+        returns.forEach(r => {
+             if (onSite[r.customer]) {
+                for (const site in onSite[r.customer]) {
+                    if (onSite[r.customer][site][r.product]) {
+                        onSite[r.customer][site][r.product] -= Number(r.quantity);
+                        break; 
+                    }
+                }
+            }
+        });
+        
+        sales.forEach(sale => {
+            if(sale.fromCustomer && sale.fromSite && onSite[sale.fromCustomer] && onSite[sale.fromCustomer][sale.fromSite] && onSite[sale.fromCustomer][sale.fromSite][sale.product]) {
+                onSite[sale.fromCustomer][sale.fromSite][sale.product] -= Number(sale.quantity);
+            }
+        });
+
+        return onSite;
+    }, [transfers, returns, sales]);
+
+    return {
+        warehouseStock: inventory,
+        customerStock: customerInventory,
+        loading: purchasesLoading || transfersLoading || returnsLoading || salesLoading
+    };
+};
+
+
+// --- Login Page ---
+const LoginPage = () => {
+    const [loading, setLoading] = useState(false);
+    const [isRegistering, setIsRegistering] = useState(false);
+    const [form] = Form.useForm();
+
+    const onFinish = async (values) => {
+        setLoading(true);
+        const { email, password, role } = values;
+        try {
+            if (isRegistering) {
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                const user = userCredential.user;
+                await setDoc(doc(db, "users", user.uid), {
+                    email: user.email,
+                    role: role || 'viewer',
+                });
+                message.success('Registration successful! Please log in.');
+                setIsRegistering(false);
+                form.resetFields();
+            } else {
+                await signInWithEmailAndPassword(auth, email, password);
+                message.success('Logged in successfully!');
+            }
+        } catch (error) {
+            message.error(error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <Layout style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#f0f2f5' }}>
+            <Card title={isRegistering ? "Register New User" : "Scaffolding Rental Login"} style={{ width: 400 }}>
+                <Form form={form} name="login" onFinish={onFinish} layout="vertical">
+                    <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email', message: 'Please input a valid email!' }]}>
+                        <Input prefix={<UserOutlined />} placeholder="Email" />
+                    </Form.Item>
+                    <Form.Item name="password" label="Password" rules={[{ required: true, message: 'Please input your password!' }]}>
+                        <Input.Password prefix={<UserOutlined />} placeholder="Password" />
+                    </Form.Item>
+                    {isRegistering && (
+                        <Form.Item name="role" label="Role" rules={[{ required: true, message: 'Please select a role!' }]}>
+                            <Select placeholder="Select a role">
+                                <Select.Option value="admin">Admin</Select.Option>
+                                <Select.Option value="user">User</Select.Option>
+                                <Select.Option value="viewer">Viewer</Select.Option>
+                            </Select>
+                        </Form.Item>
+                    )}
+                    <Form.Item>
+                        <Button type="primary" htmlType="submit" loading={loading} style={{ width: '100%' }}>
+                            {isRegistering ? 'Register' : 'Log In'}
+                        </Button>
+                    </Form.Item>
+                    <Button type="link" onClick={() => setIsRegistering(!isRegistering)} style={{ width: '100%' }}>
+                        {isRegistering ? 'Already have an account? Log In' : 'Create a new account'}
+                    </Button>
+                </Form>
+            </Card>
+        </Layout>
+    );
+};
+
+// --- Page Components ---
+
+const Dashboard = () => {
+    const { data: purchases, loading: loadingPurchases } = useCollection('purchases');
+    const { data: transfers, loading: loadingTransfers } = useCollection('transfers');
+    const { data: rentalOrders, loading: loadingOrders } = useCollection('rentalOrders');
+
+    const loading = loadingPurchases || loadingTransfers || loadingOrders;
+
+    const {
+        totalInventoryValue,
+        valueWithCustomers,
+        valueInWarehouse,
+        monthlyRentalValue,
+        activeRentals,
+        pendingOrders
+    } = React.useMemo(() => {
+        if (loading) return {
+            totalInventoryValue: 0,
+            valueWithCustomers: 0,
+            valueInWarehouse: 0,
+            monthlyRentalValue: 0,
+            activeRentals: 0,
+            pendingOrders: 0
+        };
+
+        const allPurchasedItems = purchases.flatMap(p => p.items || []);
+        const totalValue = allPurchasedItems.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.unitPrice || 0)), 0);
+
+        const avgProductPrice = {};
+        const productPricing = {};
+        allPurchasedItems.forEach(item => {
+            if (!productPricing[item.product]) {
+                productPricing[item.product] = { totalCost: 0, totalQuantity: 0 };
+            }
+            productPricing[item.product].totalCost += (Number(item.quantity || 0) * Number(item.unitPrice || 0));
+            productPricing[item.product].totalQuantity += Number(item.quantity || 0);
+        });
+
+        for (const productName in productPricing) {
+            const { totalCost, totalQuantity } = productPricing[productName];
+            avgProductPrice[productName] = totalQuantity > 0 ? totalCost / totalQuantity : 0;
+        }
+
+        const activeTransfers = transfers.filter(t => t.status === 'Rented');
+        const customerValue = activeTransfers.reduce((sum, t) => {
+            const pricePerItem = avgProductPrice[t.product] || 0;
+            return sum + (pricePerItem * Number(t.quantity || 0));
+        }, 0);
+
+        const now = new Date();
+        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const monthlyValue = activeTransfers.reduce((sum, t) => {
+            return sum + (Number(t.rentalRate || 0) * Number(t.quantity || 0) * daysInMonth);
+        }, 0);
+        
+        const pendingOrderCount = rentalOrders.filter(order => {
+            const totalOrdered = order.items.reduce((sum, item) => sum + Number(item.quantity), 0);
+            const totalDelivered = order.items.reduce((sum, item) => sum + Number(item.deliveredQuantity || 0), 0);
+            return totalDelivered < totalOrdered;
+        }).length;
+
+        return {
+            totalInventoryValue: totalValue,
+            valueWithCustomers: customerValue,
+            valueInWarehouse: totalValue - customerValue,
+            monthlyRentalValue: monthlyValue,
+            activeRentals: activeTransfers.length,
+            pendingOrders: pendingOrderCount
+        };
+    }, [purchases, transfers, rentalOrders, loading]);
+
+    const formatCurrency = (value) => `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+    return (
+        <div>
+            <h1>Dashboard</h1>
+            <Row gutter={[16, 16]}>
+                <Col xs={24} sm={12} md={8}>
+                    <Card style={{ height: '100%' }}>
+                        <Statistic title="Active Rentals" value={activeRentals} loading={loading} />
+                    </Card>
+                </Col>
+                 <Col xs={24} sm={12} md={8}>
+                    <Card style={{ height: '100%' }}>
+                        <Statistic title="Pending Rental Orders" value={pendingOrders} loading={loading} />
+                    </Card>
+                </Col>
+                 <Col xs={24} sm={12} md={8}>
+                    <Card style={{ height: '100%' }}>
+                        <Statistic
+                            title="Est. Current Month Rental"
+                            value={formatCurrency(monthlyRentalValue)}
+                            loading={loading}
+                        />
+                    </Card>
+                </Col>
+            </Row>
+            <h2 style={{marginTop: '32px'}}>Inventory Value</h2>
+            <Row gutter={[16, 16]}>
+                <Col xs={24} sm={12} md={8}>
+                    <Card style={{ height: '100%' }}>
+                        <Statistic
+                            title="Total Overall Inventory Value"
+                            value={formatCurrency(totalInventoryValue)}
+                            loading={loading}
+                        />
+                    </Card>
+                </Col>
+                <Col xs={24} sm={12} md={8}>
+                    <Card style={{ height: '100%' }}>
+                        <Statistic
+                            title="Inventory Value with Customers"
+                            value={formatCurrency(valueWithCustomers)}
+                            loading={loading}
+                        />
+                    </Card>
+                </Col>
+                <Col xs={24} sm={12} md={8}>
+                    <Card style={{ height: '100%' }}>
+                        <Statistic
+                            title="Inventory Value at Warehouse"
+                            value={formatCurrency(valueInWarehouse)}
+                            loading={loading}
+                        />
+                    </Card>
+                </Col>
+            </Row>
+        </div>
+    );
+};
+
+const ProductsPage = () => {
+    const { data, loading } = useCollection('products');
+    const [isModalVisible, setIsModalVisible] = useState(false);
+    const [editingRecord, setEditingRecord] = useState(null);
+    const [form] = Form.useForm();
+    const { userRole } = useAuth();
+
+    const showModal = () => {
+        setEditingRecord(null);
+        form.resetFields();
+        setIsModalVisible(true);
+    };
+
+    const handleEdit = (record) => {
+        setEditingRecord(record);
+        form.setFieldsValue(record);
+        setIsModalVisible(true);
+    };
+
+    const handleCancel = () => {
+        setIsModalVisible(false);
+        setEditingRecord(null);
+        form.resetFields();
+    };
+
+    const handleOk = async () => {
+        try {
+            const values = await form.validateFields();
+            if (editingRecord) {
+                const docRef = doc(db, "products", editingRecord.id);
+                await updateDoc(docRef, values);
+                message.success(`Product updated successfully!`);
+            } else {
+                await addDoc(collection(db, "products"), values);
+                message.success(`Product added successfully!`);
+            }
+            handleCancel();
+        } catch (error) {
+            message.error(`Failed to save product.`);
+        }
+    };
+
+    const columns = useMemo(() => [
+        {
+            title: 'Name',
+            dataIndex: 'name',
+            key: 'name',
+            sorter: (a, b) => a.name.localeCompare(b.name),
+            filters: [...new Set(data.map(item => item.name))].map(name => ({ text: name, value: name })),
+            onFilter: (value, record) => record.name === value,
+        },
+        {
+            title: 'UOM',
+            dataIndex: 'uom',
+            key: 'uom',
+            sorter: (a, b) => a.uom.localeCompare(b.uom),
+            filters: UOM_OPTIONS.map(uom => ({ text: uom, value: uom })),
+            onFilter: (value, record) => record.uom === value,
+        },
+        {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record) => (
+                userRole === 'admin' ? (
+                    <Button icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+                        Edit
+                    </Button>
+                ) : null
+            ),
+        }
+    ], [data, userRole]);
+
+    return (
+        <Card title="Products">
+            {(userRole === 'admin' || userRole === 'user') && (
+                <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>
+                    Add Product
+                </Button>
+            )}
+            <Table dataSource={data} columns={columns} loading={loading} rowKey="id" />
+            <Modal
+                title={editingRecord ? `Edit Product` : `Add New Product`}
+                visible={isModalVisible}
+                onOk={handleOk}
+                onCancel={handleCancel}
+            >
+                <Form form={form} layout="vertical">
+                    <Form.Item name="name" label="Product Name" rules={[{ required: true }]}>
+                        <Input />
+                    </Form.Item>
+                    <Form.Item name="uom" label="UOM (Unit of Measurement)" rules={[{ required: true }]}>
+                        <Select placeholder="Select a UOM">
+                            {UOM_OPTIONS.map(uom => <Select.Option key={uom} value={uom}>{uom}</Select.Option>)}
+                        </Select>
+                    </Form.Item>
+                </Form>
+            </Modal>
+        </Card>
+    );
+};
+
+const WarehousesPage = () => {
+    const { data, loading } = useCollection('warehouses');
+    const [isModalVisible, setIsModalVisible] = useState(false);
+    const [editingRecord, setEditingRecord] = useState(null);
+    const [form] = Form.useForm();
+    const { userRole } = useAuth();
+
+    const showModal = () => {
+        setEditingRecord(null);
+        form.resetFields();
+        setIsModalVisible(true);
+    };
+
+    const handleEdit = (record) => {
+        setEditingRecord(record);
+        form.setFieldsValue(record);
+        setIsModalVisible(true);
+    };
+
+    const handleCancel = () => {
+        setIsModalVisible(false);
+        setEditingRecord(null);
+        form.resetFields();
+    };
+
+    const handleOk = async () => {
+        try {
+            const values = await form.validateFields();
+            if (editingRecord) {
+                await updateDoc(doc(db, "warehouses", editingRecord.id), values);
+                message.success('Warehouse updated successfully!');
+            } else {
+                await addDoc(collection(db, "warehouses"), values);
+                message.success('Warehouse added successfully!');
+            }
+            handleCancel();
+        } catch (error) {
+            message.error('Failed to save warehouse.');
+        }
+    };
+
+    const columns = useMemo(() => [
+        {
+            title: 'Name',
+            dataIndex: 'name',
+            key: 'name',
+            sorter: (a, b) => a.name.localeCompare(b.name),
+            filters: [...new Set(data.map(item => item.name))].map(name => ({ text: name, value: name })),
+            onFilter: (value, record) => record.name === value,
+        },
+        {
+            title: 'Location',
+            dataIndex: 'location',
+            key: 'location',
+            sorter: (a, b) => a.location.localeCompare(b.location),
+            filters: [...new Set(data.map(item => item.location))].map(loc => ({ text: loc, value: loc })),
+            onFilter: (value, record) => record.location === value,
+        },
+        {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record) => (
+                userRole === 'admin' ? (
+                    <Button icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+                        Edit
+                    </Button>
+                ) : null
+            ),
+        }
+    ], [data, userRole]);
+
+    return (
+        <Card title="Warehouses">
+            {(userRole === 'admin' || userRole === 'user') && (
+                <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>
+                    Add Warehouse
+                </Button>
+            )}
+            <Table dataSource={data} columns={columns} loading={loading} rowKey="id" />
+            <Modal
+                title={editingRecord ? `Edit Warehouse` : `Add New Warehouse`}
+                visible={isModalVisible}
+                onOk={handleOk}
+                onCancel={handleCancel}
+            >
+                <Form form={form} layout="vertical">
+                    <Form.Item name="name" label="Warehouse Name" rules={[{ required: true }]}>
+                        <Input />
+                    </Form.Item>
+                    <Form.Item name="location" label="Location">
+                        <Input />
+                    </Form.Item>
+                </Form>
+            </Modal>
+        </Card>
+    );
+};
+
+const CustomersPage = () => {
+    const { data: customers, loading } = useCollection('customers');
+    const [isModalVisible, setIsModalVisible] = useState(false);
+    const [editingRecord, setEditingRecord] = useState(null);
+    const [form] = Form.useForm();
+    const { userRole } = useAuth();
+
+    const showModal = () => {
+        setEditingRecord(null);
+        form.resetFields();
+        setIsModalVisible(true);
+    };
+    
+    const handleEdit = (record) => {
+        setEditingRecord(record);
+        form.setFieldsValue(record);
+        setIsModalVisible(true);
+    };
+
+    const handleCancel = () => {
+        setIsModalVisible(false);
+        setEditingRecord(null);
+        form.resetFields();
+    };
+
+    const handleOk = async () => {
+        try {
+            const values = await form.validateFields();
+            const customerData = {
+                name: values.name,
+                sites: values.sites ? values.sites.filter(site => site) : []
+            };
+            if (editingRecord) {
+                const docRef = doc(db, "customers", editingRecord.id);
+                await updateDoc(docRef, customerData);
+                message.success('Customer updated successfully!');
+            } else {
+                await addDoc(collection(db, "customers"), customerData);
+                message.success('Customer added successfully!');
+            }
+            handleCancel();
+        } catch (error) {
+            console.error("Failed to save customer: ", error);
+            message.error('Failed to save customer.');
+        }
+    };
+    
+    const columns = useMemo(() => [
+        {
+            title: 'Customer Name',
+            dataIndex: 'name',
+            key: 'name',
+            sorter: (a, b) => a.name.localeCompare(b.name),
+            filters: [...new Set(customers.map(item => item.name))].map(name => ({ text: name, value: name })),
+            onFilter: (value, record) => record.name === value,
+        },
+        { 
+            title: 'Sites', 
+            dataIndex: 'sites', 
+            key: 'sites',
+            render: sites => (sites ? sites.join(', ') : 'No sites added')
+        },
+        {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record) => (
+                userRole === 'admin' ? (
+                    <Button icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+                        Edit
+                    </Button>
+                ) : null
+            ),
+        }
+    ], [customers, userRole]);
+
+    return (
+        <Card title="Customers">
+            {(userRole === 'admin' || userRole === 'user') && 
+                <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>Add Customer</Button>
+            }
+            <Table dataSource={customers} columns={columns} loading={loading} rowKey="id" />
+            <Modal title={editingRecord ? "Edit Customer" : "Add New Customer"} visible={isModalVisible} onOk={handleOk} onCancel={handleCancel}>
+                <Form form={form} layout="vertical" initialValues={{ sites: [''] }}>
+                    <Form.Item name="name" label="Customer Name" rules={[{ required: true }]}>
+                        <Input />
+                    </Form.Item>
+                    <Form.List name="sites">
+                        {(fields, { add, remove }) => (
+                            <>
+                                {fields.map(({ key, name, ...restField }) => (
+                                    <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
+                                        <Form.Item
+                                            {...restField}
+                                            name={[name]}
+                                            label={name === 0 ? "Site Name" : ""}
+                                            rules={[{ required: true, message: 'Missing site name' }]}
+                                        >
+                                            <Input placeholder="Customer Site Name" />
+                                        </Form.Item>
+                                        {fields.length > 1 ? (
+                                            <MinusCircleOutlined onClick={() => remove(name)} />
+                                        ) : null}
+                                    </Space>
+                                ))}
+                                <Form.Item>
+                                    <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                                        Add another site
+                                    </Button>
+                                </Form.Item>
+                            </>
+                        )}
+                    </Form.List>
+                </Form>
+            </Modal>
+        </Card>
+    );
+};
+
+
+const PurchasesPage = () => {
+    const { data: products } = useCollection('products');
+    const { data: warehouses } = useCollection('warehouses');
+    const { data: purchases, loading } = useCollection('purchases');
+    const [isModalVisible, setIsModalVisible] = useState(false);
+    const [editingRecord, setEditingRecord] = useState(null);
+    const [form] = Form.useForm();
+    const { userRole } = useAuth();
+    
+    const showModal = () => {
+        setEditingRecord(null);
+        form.resetFields();
+        setIsModalVisible(true);
+    };
+    
+    const handleEdit = (record) => {
+        setEditingRecord(record);
+        setIsModalVisible(true);
+    };
+
+    useEffect(() => {
+        if (editingRecord && isModalVisible) {
+            form.setFieldsValue({
+                ...editingRecord,
+                purchaseDate: editingRecord.purchaseDate ? new Date(editingRecord.purchaseDate) : null,
+            });
+        }
+    }, [editingRecord, isModalVisible, form]);
+
+    const handleCancel = () => {
+        setIsModalVisible(false);
+        setEditingRecord(null);
+        form.resetFields();
+    };
+
+
+    const handleOk = async () => {
+        try {
+            const values = await form.validateFields();
+            const purchaseData = {
+                ...values,
+                purchaseDate: values.purchaseDate.toISOString(),
+                items: values.items || []
+            };
+
+            if (editingRecord) {
+                const docRef = doc(db, "purchases", editingRecord.id);
+                await updateDoc(docRef, purchaseData);
+                message.success('Purchase updated successfully!');
+            } else {
+                await addDoc(collection(db, "purchases"), purchaseData);
+                message.success('Purchase recorded successfully!');
+            }
+            handleCancel();
+        } catch (error) {
+            console.error("Failed to save purchase: ", error);
+            message.error('Failed to save purchase.');
+        }
+    };
+    
+    const expandedRowRender = (record) => {
+        const itemColumns = [
+            { title: 'Product', dataIndex: 'product', key: 'product' },
+            { title: 'Quantity', dataIndex: 'quantity', key: 'quantity' },
+            { title: 'Unit Price (INR)', dataIndex: 'unitPrice', key: 'unitPrice' },
+            { title: 'Total Price', key: 'total', render: (_, item) => (item.quantity * item.unitPrice).toFixed(2) }
+        ];
+        return <Table columns={itemColumns} dataSource={record.items} pagination={false} />;
+    };
+
+    const columns = useMemo(() => [
+        {
+            title: 'Invoice No.',
+            dataIndex: 'invoiceNumber',
+            key: 'invoiceNumber',
+            sorter: (a, b) => a.invoiceNumber.localeCompare(b.invoiceNumber),
+        },
+        {
+            title: 'Warehouse',
+            dataIndex: 'warehouse',
+            key: 'warehouse',
+            filters: [...new Set(warehouses.map(item => item.name))].map(name => ({ text: name, value: name })),
+            onFilter: (value, record) => record.warehouse === value,
+        },
+        {
+            title: 'Date',
+            dataIndex: 'purchaseDate',
+            key: 'purchaseDate',
+            render: (text) => new Date(text).toLocaleDateString(),
+            sorter: (a, b) => new Date(a.purchaseDate) - new Date(b.purchaseDate),
+        },
+        { 
+            title: 'Total Value (INR)',
+            key: 'totalValue',
+            render: (_, record) => (record.items || []).reduce((acc, item) => acc + (item.quantity * item.unitPrice), 0).toFixed(2),
+            sorter: (a, b) => (a.items || []).reduce((acc, item) => acc + (item.quantity * item.unitPrice), 0) - (b.items || []).reduce((acc, item) => acc + (item.quantity * item.unitPrice), 0),
+        },
+        {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record) => (
+                userRole === 'admin' ? (
+                    <Button icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+                        Edit
+                    </Button>
+                ) : null
+            ),
+        }
+    ], [purchases, warehouses, userRole]);
+
+    return (
+        <Card title="Purchases">
+            {(userRole === 'admin' || userRole === 'user') && 
+                <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>Record Purchase</Button>
+            }
+            <Table 
+                dataSource={purchases} 
+                columns={columns} 
+                loading={loading} 
+                rowKey="id" 
+                expandable={{ expandedRowRender }}
+            />
+            <Modal title={editingRecord ? "Edit Purchase" : "Record New Purchase"} width={800} visible={isModalVisible} onOk={handleOk} onCancel={handleCancel}>
+                <Form form={form} layout="vertical" initialValues={{ items: [{}] }}>
+                    <Row gutter={16}>
+                        <Col span={8}>
+                             <Form.Item name="invoiceNumber" label="Invoice Number" rules={[{ required: true }]}>
+                                <Input />
+                            </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                            <Form.Item name="warehouse" label="Warehouse" rules={[{ required: true }]}>
+                                <Select placeholder="Select a warehouse">
+                                    {warehouses.map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
+                                </Select>
+                            </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                            <Form.Item name="purchaseDate" label="Purchase Date" rules={[{ required: true }]}>
+                                <DatePicker style={{ width: '100%' }} />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                    <Divider>Products</Divider>
+                    <Form.List name="items">
+                        {(fields, { add, remove }) => (
+                            <>
+                                {fields.map(({ key, name, ...restField }) => (
+                                    <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="end">
+                                        <Form.Item
+                                            {...restField}
+                                            name={[name, 'product']}
+                                            label="Product"
+                                            rules={[{ required: true, message: 'Missing product' }]}
+                                            style={{width: '250px'}}
+                                        >
+                                            <Select placeholder="Select Product">
+                                                {products.map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}
+                                            </Select>
+                                        </Form.Item>
+                                        <Form.Item
+                                            {...restField}
+                                            name={[name, 'quantity']}
+                                            label="Quantity"
+                                            rules={[{ required: true, type: 'number', min: 1, message: 'Invalid quantity' }]}
+                                        >
+                                            <InputNumber placeholder="Qty" />
+                                        </Form.Item>
+                                        <Form.Item
+                                            {...restField}
+                                            name={[name, 'unitPrice']}
+                                            label="Unit Price (INR)"
+                                            rules={[{ required: true, type: 'number', min: 0, message: 'Invalid price' }]}
+                                        >
+                                            <InputNumber placeholder="Unit Price" />
+                                        </Form.Item>
+                                        <MinusCircleOutlined onClick={() => remove(name)} />
+                                    </Space>
+                                ))}
+                                <Form.Item>
+                                    <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                                        Add Product
+                                    </Button>
+                                </Form.Item>
+                            </>
+                        )}
+                    </Form.List>
+                </Form>
+            </Modal>
+        </Card>
+    );
+};
+
+const TransfersPage = () => {
+    const { data: products } = useCollection('products');
+    const { data: customers, loading: customersLoading } = useCollection('customers');
+    const { data: warehouses } = useCollection('warehouses');
+    const { data: rentalOrders } = useCollection('rentalOrders');
+    const { data: transfers, loading } = useCollection('transfers');
+    const { warehouseStock } = useInventory();
+    const [isModalVisible, setIsModalVisible] = useState(false);
+    const [form] = Form.useForm();
+    const { userRole } = useAuth();
+    const [selectedCustomerSites, setSelectedCustomerSites] = useState([]);
+    const [openOrders, setOpenOrders] = useState([]);
+
+    const showModal = () => {
+        form.resetFields();
+        setSelectedCustomerSites([]);
+        setOpenOrders([]);
+        setIsModalVisible(true);
+    };
+    
+    const handleCancel = () => {
+        setIsModalVisible(false);
+        form.resetFields();
+        setSelectedCustomerSites([]);
+        setOpenOrders([]);
+    };
+
+    const handleOk = async () => {
+        try {
+            const values = await form.validateFields();
+            
+            await runTransaction(db, async (transaction) => {
+                let rentalRate = values.rentalRate;
+                let orderRef = null;
+                let orderData = null;
+
+                // --- READ PHASE ---
+                if (values.rentalOrderId) {
+                    orderRef = doc(db, "rentalOrders", values.rentalOrderId);
+                    const orderDoc = await transaction.get(orderRef);
+                    if (!orderDoc.exists()) {
+                        throw new Error("Rental order not found!");
+                    }
+                    orderData = orderDoc.data();
+                }
+
+                // --- WRITE PHASE ---
+                const newTransferRef = doc(collection(db, "transfers"));
+
+                if (orderData) {
+                    const itemIndex = orderData.items.findIndex(item => item.product === values.product);
+                    if (itemIndex > -1) {
+                        const currentDelivered = orderData.items[itemIndex].deliveredQuantity || 0;
+                        const orderedQty = orderData.items[itemIndex].quantity;
+                        const transferQty = Number(values.quantity);
+
+                        if (currentDelivered + transferQty > orderedQty) {
+                             throw new Error(`Cannot transfer more than ordered. Pending: ${orderedQty - currentDelivered}`);
+                        }
+                        
+                        if (values.rentalRate === undefined || values.rentalRate === null) {
+                            rentalRate = orderData.items[itemIndex].perDayRent;
+                        }
+
+                        const updatedItems = [...orderData.items];
+                        updatedItems[itemIndex].deliveredQuantity = currentDelivered + transferQty;
+                        transaction.update(orderRef, { items: updatedItems });
+                    } else {
+                        throw new Error(`Product ${values.product} not found in the selected rental order.`);
+                    }
+                }
+                
+                const transferData = {
+                    ...values,
+                    rentalRate,
+                    transferDate: values.transferDate.toISOString(),
+                    rentalStartDate: values.rentalStartDate.toISOString(),
+                    status: 'Rented'
+                };
+                
+                transaction.set(newTransferRef, transferData);
+            });
+            
+            message.success('Transfer recorded successfully!');
+            handleCancel();
+
+        } catch (error) {
+            console.error("Failed to save transfer: ", error);
+            message.error(`Failed to save transfer: ${error.message}`);
+        }
+    };
+    
+    const handleDelete = (id) => {
+        Modal.confirm({
+            title: 'Are you sure you want to delete this transfer record?',
+            icon: <ExclamationCircleOutlined />,
+            content: 'This action cannot be undone and will affect inventory calculations.',
+            onOk: async () => {
+                try {
+                    await deleteDoc(doc(db, "transfers", id));
+                    message.success("Transfer record deleted successfully");
+                } catch (error) {
+                    message.error("Failed to delete transfer record");
+                }
+            },
+        });
+    };
+    
+    const handleCustomerChange = (customerName) => {
+        const customer = customers.find(c => c.name === customerName);
+        if (customer) {
+            setSelectedCustomerSites(customer.sites || []);
+        } else {
+            setSelectedCustomerSites([]);
+        }
+        form.setFieldsValue({ site: undefined, rentalOrderId: undefined });
+    };
+
+    const handleSiteChange = (siteName) => {
+        const customerName = form.getFieldValue('customer');
+        const relatedOrders = rentalOrders.filter(order => {
+            const totalOrdered = order.items.reduce((sum, item) => sum + item.quantity, 0);
+            const totalDelivered = order.items.reduce((sum, item) => sum + (item.deliveredQuantity || 0), 0);
+            return order.customerName === customerName && order.siteName === siteName && totalDelivered < totalOrdered;
+        });
+        setOpenOrders(relatedOrders);
+        form.setFieldsValue({ rentalOrderId: undefined });
+    };
+
+    const columns = useMemo(() => [
+        { title: 'DC No.', dataIndex: 'dcNumber', key: 'dcNumber', sorter: (a, b) => a.dcNumber.localeCompare(b.dcNumber) },
+        {
+            title: 'Customer',
+            dataIndex: 'customer',
+            key: 'customer',
+            sorter: (a, b) => a.customer.localeCompare(b.customer),
+            filters: [...new Set(transfers.map(item => item.customer))].map(c => ({ text: c, value: c })),
+            onFilter: (value, record) => record.customer === value,
+        },
+        { title: 'Site', dataIndex: 'site', key: 'site', sorter: (a, b) => a.site.localeCompare(b.site) },
+        { title: 'Work Order No.', dataIndex: 'workOrderNumber', key: 'workOrderNumber' },
+        { 
+            title: 'Product', 
+            dataIndex: 'product', 
+            key: 'product',
+            filters: [...new Set(products.map(item => item.name))].map(p => ({ text: p, value: p })),
+            onFilter: (value, record) => record.product === value,
+        },
+        { title: 'Quantity', dataIndex: 'quantity', key: 'quantity', sorter: (a, b) => a.quantity - b.quantity },
+        { title: 'From', dataIndex: 'from', key: 'from' },
+        { title: 'Rental Rate/Day (INR)', dataIndex: 'rentalRate', key: 'rentalRate', sorter: (a, b) => a.rentalRate - b.rentalRate },
+        { title: 'Rental Start', dataIndex: 'rentalStartDate', key: 'rentalStartDate', render: (text) => new Date(text).toLocaleDateString(), sorter: (a, b) => new Date(a.rentalStartDate) - new Date(b.rentalStartDate) },
+        { title: 'Status', dataIndex: 'status', key: 'status' },
+        {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record) => (
+                userRole === 'admin' ? (
+                    <Button danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>
+                        Delete
+                    </Button>
+                ) : null
+            ),
+        }
+    ], [transfers, products, userRole]);
+
+    return (
+        <Card title="Material Transfers to Customers">
+             {(userRole === 'admin' || userRole === 'user') && 
+                <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>New Transfer</Button>
+             }
+            <Table dataSource={transfers} columns={columns} loading={loading} rowKey="id" />
+            <Modal title="New Material Transfer" visible={isModalVisible} onOk={handleOk} onCancel={handleCancel}>
+                <Form form={form} layout="vertical">
+                    <Form.Item name="dcNumber" label="Delivery Challan Number" rules={[{ required: true }]}>
+                        <Input />
+                    </Form.Item>
+                    <Form.Item name="workOrderNumber" label="Work Order Number (Optional)">
+                        <Input />
+                    </Form.Item>
+                    <Form.Item name="customer" label="Customer" rules={[{ required: true }]}>
+                        <Select placeholder="Select a customer" onSelect={handleCustomerChange}>
+                            {customers.map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}
+                        </Select>
+                    </Form.Item>
+                     <Form.Item name="site" label="Site Name" rules={[{ required: true }]}>
+                        <Select placeholder="Select a site" disabled={selectedCustomerSites.length === 0} onSelect={handleSiteChange}>
+                            {selectedCustomerSites.map(site => <Select.Option key={site} value={site}>{site}</Select.Option>)}
+                        </Select>
+                    </Form.Item>
+                    <Form.Item name="rentalOrderId" label="Link to Rental Order">
+                        <Select placeholder="Select an order (optional)" allowClear disabled={openOrders.length === 0}>
+                            {openOrders.map(order => <Select.Option key={order.id} value={order.id}>{order.workOrderNumber}</Select.Option>)}
+                        </Select>
+                    </Form.Item>
+                    <Form.Item name="product" label="Product" rules={[{ required: true }]}>
+                        <Select placeholder="Select a product">
+                            {products.map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}
+                        </Select>
+                    </Form.Item>
+                    <Form.Item
+                        name="quantity"
+                        label="Quantity"
+                        dependencies={['from', 'product']}
+                        rules={[
+                            { required: true, type: 'number' },
+                            ({ getFieldValue }) => ({
+                                validator(_, value) {
+                                    const warehouse = getFieldValue('from');
+                                    const product = getFieldValue('product');
+                                    if (!value || !warehouse || !product) {
+                                        return Promise.resolve();
+                                    }
+                                    const availableStock = warehouseStock[warehouse]?.[product] || 0;
+                                    if (value > availableStock) {
+                                        return Promise.reject(new Error(`Not enough stock. Only ${availableStock} units available.`));
+                                    }
+                                    return Promise.resolve();
+                                },
+                            }),
+                        ]}
+                    >
+                        <InputNumber style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name="from" label="Transfer From (Warehouse)" rules={[{ required: true }]}>
+                        <Select placeholder="Select a warehouse">
+                            {warehouses.map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
+                        </Select>
+                    </Form.Item>
+                    <Form.Item name="rentalRate" label="Rental Rate per item/day (INR)" rules={[{ required: true, type: 'number' }]}>
+                        <InputNumber style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name="transferDate" label="Transfer Date" rules={[{ required: true }]}>
+                        <DatePicker style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name="rentalStartDate" label="Rental Start Date" rules={[{ required: true }]}>
+                        <DatePicker style={{ width: '100%' }} />
+                    </Form.Item>
+                </Form>
+            </Modal>
+        </Card>
+    );
+};
+
+const ReturnsPage = () => {
+    const { data: products } = useCollection('products');
+    const { data: customers } = useCollection('customers');
+    const { data: warehouses } = useCollection('warehouses');
+    const { data: returns, loading } = useCollection('returns');
+    const { customerStock } = useInventory();
+    const [isModalVisible, setIsModalVisible] = useState(false);
+    const [form] = Form.useForm();
+    const { userRole } = useAuth();
+
+    const handleOk = async () => {
+        try {
+            const values = await form.validateFields();
+            await addDoc(collection(db, "returns"), {
+                ...values,
+                returnDate: values.returnDate.toISOString(),
+            });
+            message.success('Return recorded successfully!');
+            setIsModalVisible(false);
+            form.resetFields();
+        } catch (error) {
+            message.error('Failed to record return.');
+        }
+    };
+    
+    const handleDelete = (id) => {
+        Modal.confirm({
+            title: 'Are you sure you want to delete this return record?',
+            icon: <ExclamationCircleOutlined />,
+            content: 'This action cannot be undone and will affect inventory calculations.',
+            onOk: async () => {
+                try {
+                    await deleteDoc(doc(db, "returns", id));
+                    message.success("Return record deleted successfully");
+                } catch (error) {
+                    message.error("Failed to delete return record");
+                }
+            },
+        });
+    };
+
+    const columns = [
+        { title: 'Customer', dataIndex: 'customer', key: 'customer' },
+        { title: 'Product', dataIndex: 'product', key: 'product' },
+        { title: 'Quantity', dataIndex: 'quantity', key: 'quantity' },
+        { title: 'Return To (Warehouse)', dataIndex: 'returnTo', key: 'returnTo' },
+        { title: 'Return Date', dataIndex: 'returnDate', key: 'returnDate', render: (text) => new Date(text).toLocaleDateString() },
+        {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record) => (
+                userRole === 'admin' ? (
+                    <Button danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>
+                        Delete
+                    </Button>
+                ) : null
+            ),
+        }
+    ];
+
+    return (
+        <Card title="Material Returns">
+            {(userRole === 'admin' || userRole === 'user') &&
+                <Button type="primary" onClick={() => setIsModalVisible(true)} style={{ marginBottom: 16 }}>New Return</Button>
+            }
+            <Table dataSource={returns} columns={columns} loading={loading} rowKey="id" />
+            <Modal title="Record Material Return" visible={isModalVisible} onOk={handleOk} onCancel={() => setIsModalVisible(false)}>
+                <Form form={form} layout="vertical">
+                    <Form.Item name="customer" label="Returning Customer" rules={[{ required: true }]}>
+                        <Select placeholder="Select a customer">{customers.map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}</Select>
+                    </Form.Item>
+                    <Form.Item name="product" label="Product" rules={[{ required: true }]}>
+                        <Select placeholder="Select a product">{products.map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}</Select>
+                    </Form.Item>
+                    <Form.Item
+                        name="quantity"
+                        label="Quantity"
+                        dependencies={['customer', 'product']}
+                        rules={[
+                            { required: true, type: 'number' },
+                            ({ getFieldValue }) => ({
+                                validator(_, value) {
+                                    const customer = getFieldValue('customer');
+                                    const product = getFieldValue('product');
+                                    if (!value || !customer || !product) {
+                                        return Promise.resolve();
+                                    }
+                                    
+                                    let onSiteQty = 0;
+                                    if(customerStock[customer]) {
+                                        for(const site in customerStock[customer]) {
+                                            onSiteQty += customerStock[customer][site][product] || 0;
+                                        }
+                                    }
+                                    
+                                    if (value > onSiteQty) {
+                                        return Promise.reject(new Error(`Invalid quantity. Customer has ${onSiteQty} units.`));
+                                    }
+                                    return Promise.resolve();
+                                },
+                            }),
+                        ]}
+                    >
+                        <InputNumber style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name="returnTo" label="Return To (Warehouse)" rules={[{ required: true }]}>
+                        <Select placeholder="Select a warehouse">{warehouses.map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}</Select>
+                    </Form.Item>
+                    <Form.Item name="returnDate" label="Return Date" rules={[{ required: true }]}>
+                        <DatePicker style={{ width: '100%' }} />
+                    </Form.Item>
+                </Form>
+            </Modal>
+        </Card>
+    );
+};
+
+const SalesPage = () => {
+    const { data: sales, loading } = useCollection('sales');
+    const { data: warehouses } = useCollection('warehouses');
+    const { data: customers } = useCollection('customers');
+    const { warehouseStock, customerStock } = useInventory();
+    const [isModalVisible, setIsModalVisible] = useState(false);
+    const [form] = Form.useForm();
+    const { userRole } = useAuth();
+    const [saleFrom, setSaleFrom] = useState('warehouse');
+    const [availableProducts, setAvailableProducts] = useState([]);
+    const [selectedLocation, setSelectedLocation] = useState({ type: null, name: null, site: null });
+
+    const showModal = () => {
+        form.resetFields();
+        setSaleFrom('warehouse');
+        setAvailableProducts([]);
+        setSelectedLocation({ type: null, name: null, site: null });
+        setIsModalVisible(true);
+    };
+
+    const handleCancel = () => {
+        setIsModalVisible(false);
+    };
+
+    const handleOk = async () => {
+        try {
+            const values = await form.validateFields();
+            const saleData = {
+                ...values,
+                invoiceDate: values.invoiceDate.toISOString(),
+                fromWarehouse: saleFrom === 'warehouse' ? values.location : null,
+                fromCustomer: saleFrom === 'client' ? values.location : null,
+                fromSite: saleFrom === 'client' ? values.site : null,
+            };
+            await addDoc(collection(db, "sales"), saleData);
+            message.success('Sale recorded successfully!');
+            handleCancel();
+        } catch (error) {
+            console.error("Failed to record sale: ", error);
+            message.error('Failed to record sale.');
+        }
+    };
+    
+    const handleDelete = (id) => {
+        Modal.confirm({
+            title: 'Are you sure you want to delete this sale record?',
+            icon: <ExclamationCircleOutlined />,
+            content: 'This action cannot be undone and will affect inventory calculations.',
+            onOk: async () => {
+                try {
+                    await deleteDoc(doc(db, "sales", id));
+                    message.success("Sale record deleted successfully");
+                } catch (error) {
+                    message.error("Failed to delete sale record");
+                }
+            },
+        });
+    };
+    
+    const handleLocationChange = (type, value, site = null) => {
+        form.setFieldsValue({ product: undefined, quantity: undefined });
+        let stock = {};
+        if (type === 'warehouse' && warehouseStock[value]) {
+            stock = warehouseStock[value];
+        } else if (type === 'client' && customerStock[value] && customerStock[value][site]) {
+            stock = customerStock[value][site];
+        }
+        setAvailableProducts(Object.keys(stock).filter(p => stock[p] > 0));
+        setSelectedLocation({ type, name: value, site });
+    };
+
+    const columns = [
+        { title: 'Invoice No.', dataIndex: 'invoiceNumber', key: 'invoiceNumber' },
+        { title: 'Product', dataIndex: 'product', key: 'product' },
+        { title: 'Quantity', dataIndex: 'quantity', key: 'quantity' },
+        { title: 'Sale Price/Unit (INR)', dataIndex: 'salePrice', key: 'salePrice' },
+        { title: 'Total Sale Value (INR)', key: 'totalSale', render: (_, record) => (record.quantity * record.salePrice).toFixed(2) },
+        { title: 'Invoice Date', dataIndex: 'invoiceDate', key: 'invoiceDate', render: (text) => new Date(text).toLocaleDateString() },
+        { title: 'Sold From', key: 'soldFrom', render: (_, record) => record.fromWarehouse ? `Warehouse: ${record.fromWarehouse}` : `Client: ${record.fromCustomer} (${record.fromSite})`},
+        {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record) => (
+                userRole === 'admin' ? (
+                    <Button danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>
+                        Delete
+                    </Button>
+                ) : null
+            ),
+        }
+    ];
+
+    return (
+        <Card title="Obsolete/Damaged Sales">
+            {(userRole === 'admin' || userRole === 'user') &&
+                <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>Record Sale</Button>
+            }
+            <Table dataSource={sales} columns={columns} loading={loading} rowKey="id" />
+            <Modal title="Record New Sale" visible={isModalVisible} onOk={handleOk} onCancel={handleCancel}>
+                <Form form={form} layout="vertical" initialValues={{ saleFrom: 'warehouse' }}>
+                    <Form.Item name="invoiceNumber" label="Invoice Number" rules={[{ required: true }]}>
+                        <Input />
+                    </Form.Item>
+                    <Form.Item name="saleFrom" label="Sell From">
+                        <Radio.Group onChange={(e) => setSaleFrom(e.target.value)}>
+                            <Radio.Button value="warehouse">Warehouse</Radio.Button>
+                            <Radio.Button value="client">Client Site</Radio.Button>
+                        </Radio.Group>
+                    </Form.Item>
+                    
+                    {saleFrom === 'warehouse' && (
+                         <Form.Item name="location" label="Warehouse" rules={[{ required: true }]}>
+                            <Select placeholder="Select a warehouse" onChange={(val) => handleLocationChange('warehouse', val)}>
+                                {warehouses.map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
+                            </Select>
+                        </Form.Item>
+                    )}
+                    
+                    {saleFrom === 'client' && (
+                        <Space>
+                            <Form.Item name="location" label="Customer" rules={[{ required: true }]}>
+                                <Select placeholder="Select a customer" style={{width: 200}} onChange={(val) => handleLocationChange('client', val)}>
+                                    {customers.map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}
+                                </Select>
+                            </Form.Item>
+                            <Form.Item name="site" label="Site" rules={[{ required: true }]}>
+                                <Select placeholder="Select a site" style={{width: 200}} onChange={(val) => handleLocationChange('client', form.getFieldValue('location'), val)}>
+                                    {(customers.find(c => c.name === form.getFieldValue('location'))?.sites || []).map(s => <Select.Option key={s} value={s}>{s}</Select.Option>)}
+                                </Select>
+                            </Form.Item>
+                        </Space>
+                    )}
+
+                    <Form.Item name="product" label="Product" rules={[{ required: true }]}>
+                        <Select placeholder="Select a product" disabled={availableProducts.length === 0}>
+                            {availableProducts.map(p => <Select.Option key={p} value={p}>{p}</Select.Option>)}
+                        </Select>
+                    </Form.Item>
+                    <Form.Item
+                        name="quantity"
+                        label="Quantity"
+                        dependencies={['product']}
+                        rules={[
+                            { required: true, type: 'number' },
+                             ({ getFieldValue }) => ({
+                                validator(_, value) {
+                                    const product = getFieldValue('product');
+                                    if (!value || !product || !selectedLocation.name) return Promise.resolve();
+                                    
+                                    let availableStock = 0;
+                                    if(selectedLocation.type === 'warehouse') {
+                                        availableStock = warehouseStock[selectedLocation.name]?.[product] || 0;
+                                    } else if (selectedLocation.type === 'client') {
+                                        availableStock = customerStock[selectedLocation.name]?.[selectedLocation.site]?.[product] || 0;
+                                    }
+
+                                    if (value > availableStock) {
+                                        return Promise.reject(new Error(`Not enough stock. Only ${availableStock} units available.`));
+                                    }
+                                    return Promise.resolve();
+                                },
+                            }),
+                        ]}
+                    >
+                        <InputNumber style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name="salePrice" label="Sale Price/Unit (INR)" rules={[{ required: true, type: 'number' }]}>
+                        <InputNumber style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name="invoiceDate" label="Invoice Date" rules={[{ required: true }]}>
+                        <DatePicker style={{ width: '100%' }} />
+                    </Form.Item>
+                </Form>
+            </Modal>
+        </Card>
+    );
+};
+
+const RentalOrdersPage = () => {
+    const { data: products } = useCollection('products');
+    const { data: customers } = useCollection('customers');
+    const { data: rentalOrders, loading } = useCollection('rentalOrders');
+    const { userRole } = useAuth();
+    const [isModalVisible, setIsModalVisible] = useState(false);
+    const [form] = Form.useForm();
+    const [selectedCustomerSites, setSelectedCustomerSites] = useState([]);
+
+    const showModal = () => {
+        form.resetFields();
+        setSelectedCustomerSites([]);
+        setIsModalVisible(true);
+    };
+
+    const handleCancel = () => {
+        setIsModalVisible(false);
+    };
+
+    const handleOk = async () => {
+        try {
+            const values = await form.validateFields();
+            const orderData = {
+                ...values,
+                orderDate: new Date().toISOString(),
+                items: values.items.map(item => ({ ...item, deliveredQuantity: 0 })),
+                status: 'Pending'
+            };
+            await addDoc(collection(db, "rentalOrders"), orderData);
+            message.success('Rental Order created successfully!');
+            handleCancel();
+        } catch (error) {
+            console.error("Failed to create rental order: ", error);
+            message.error('Failed to create rental order.');
+        }
+    };
+    
+    const handleDelete = (id) => {
+        Modal.confirm({
+            title: 'Are you sure you want to delete this rental order?',
+            icon: <ExclamationCircleOutlined />,
+            content: 'This action cannot be undone.',
+            onOk: async () => {
+                try {
+                    await deleteDoc(doc(db, "rentalOrders", id));
+                    message.success("Rental order deleted successfully");
+                } catch (error) {
+                    message.error("Failed to delete rental order");
+                }
+            },
+        });
+    };
+    
+    const getStatus = (record) => {
+        const totalOrdered = record.items.reduce((sum, item) => sum + Number(item.quantity), 0);
+        const totalDelivered = record.items.reduce((sum, item) => sum + Number(item.deliveredQuantity || 0), 0);
+        if (totalDelivered === 0) return <Tag color="red">Pending</Tag>;
+        if (totalDelivered >= totalOrdered) return <Tag color="green">Fulfilled</Tag>;
+        return <Tag color="orange">Partially Fulfilled</Tag>;
+    };
+
+    const expandedRowRender = (record) => {
+        const itemColumns = [
+            { title: 'Product', dataIndex: 'product', key: 'product' },
+            { title: 'Ordered', dataIndex: 'quantity', key: 'quantity' },
+            { title: 'Delivered', dataIndex: 'deliveredQuantity', key: 'deliveredQuantity', render: (val) => val || 0 },
+            { title: 'Pending', key: 'pending', render: (_, item) => item.quantity - (item.deliveredQuantity || 0) },
+            { title: 'Per Day Rent (INR)', dataIndex: 'perDayRent', key: 'perDayRent' },
+        ];
+        return <Table columns={itemColumns} dataSource={record.items} pagination={false} />;
+    };
+
+    const columns = [
+        { title: 'Order Date', dataIndex: 'orderDate', key: 'orderDate', render: (text) => new Date(text).toLocaleDateString() },
+        { title: 'Work Order No.', dataIndex: 'workOrderNumber', key: 'workOrderNumber' },
+        { title: 'Customer', dataIndex: 'customerName', key: 'customerName' },
+        { title: 'Site', dataIndex: 'siteName', key: 'siteName' },
+        { title: 'Status', key: 'status', render: (_, record) => getStatus(record) },
+        {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record) => (
+                userRole === 'admin' ? (
+                    <Button danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>
+                        Delete
+                    </Button>
+                ) : null
+            ),
+        }
+    ];
+
+    return (
+        <Card title="Rental Orders">
+            {(userRole === 'admin' || userRole === 'user') && 
+                <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>New Rental Order</Button>
+            }
+            <Table 
+                dataSource={rentalOrders} 
+                columns={columns} 
+                loading={loading} 
+                rowKey="id" 
+                expandable={{ expandedRowRender }}
+            />
+            <Modal title="New Rental Order" width={800} visible={isModalVisible} onOk={handleOk} onCancel={handleCancel}>
+                <Form form={form} layout="vertical" initialValues={{ items: [{}] }}>
+                     <Row gutter={16}>
+                        <Col span={8}>
+                            <Form.Item name="workOrderNumber" label="Work Order Number" rules={[{ required: true }]}>
+                                <Input />
+                            </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                             <Form.Item name="customerName" label="Customer Name" rules={[{ required: true }]}>
+                                <Select placeholder="Select a customer" onSelect={(val) => {
+                                    const customer = customers.find(c => c.name === val);
+                                    setSelectedCustomerSites(customer ? customer.sites || [] : []);
+                                    form.setFieldsValue({ siteName: undefined });
+                                }}>
+                                    {customers.map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}
+                                </Select>
+                            </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                            <Form.Item name="siteName" label="Site Name" rules={[{ required: true }]}>
+                                <Select placeholder="Select a site" disabled={selectedCustomerSites.length === 0}>
+                                    {selectedCustomerSites.map(site => <Select.Option key={site} value={site}>{site}</Select.Option>)}
+                                </Select>
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                    <Divider>Products</Divider>
+                    <Form.List name="items">
+                        {(fields, { add, remove }) => (
+                            <>
+                                {fields.map(({ key, name, ...restField }) => (
+                                    <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="end">
+                                        <Form.Item
+                                            {...restField}
+                                            name={[name, 'product']}
+                                            label="Product"
+                                            rules={[{ required: true, message: 'Missing product' }]}
+                                            style={{width: '250px'}}
+                                        >
+                                            <Select placeholder="Select Product">
+                                                {products.map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}
+                                            </Select>
+                                        </Form.Item>
+                                        <Form.Item
+                                            {...restField}
+                                            name={[name, 'quantity']}
+                                            label="Quantity"
+                                            rules={[{ required: true, type: 'number', min: 1, message: 'Invalid quantity' }]}
+                                        >
+                                            <InputNumber placeholder="Qty" />
+                                        </Form.Item>
+                                        <Form.Item
+                                            {...restField}
+                                            name={[name, 'perDayRent']}
+                                            label="Per Day Rent (INR)"
+                                            rules={[{ required: true, type: 'number', min: 0, message: 'Invalid price' }]}
+                                        >
+                                            <InputNumber placeholder="Rent/Day" />
+                                        </Form.Item>
+                                        <MinusCircleOutlined onClick={() => remove(name)} />
+                                    </Space>
+                                ))}
+                                <Form.Item>
+                                    <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                                        Add Product
+                                    </Button>
+                                </Form.Item>
+                            </>
+                        )}
+                    </Form.List>
+                </Form>
+            </Modal>
+        </Card>
+    );
+}
+
+const RentalReportGenerator = ({ customers, onFinish }) => {
+    const [form] = Form.useForm();
+    const clientName = Form.useWatch('clientName', form);
+    const [sites, setSites] = useState([]);
+
+    useEffect(() => {
+        const selectedCustomer = customers.find(c => c.name === clientName);
+        setSites(selectedCustomer?.sites || []);
+        form.setFieldsValue({ siteName: undefined });
+    }, [clientName, customers, form]);
+
+    return (
+        <Form form={form} onFinish={onFinish} layout="inline">
+            <Form.Item name="clientName" label="Client" rules={[{ required: true }]}>
+                <Select style={{ width: 200 }} placeholder="Select Client">
+                    {customers.map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}
+                </Select>
+            </Form.Item>
+            <Form.Item name="siteName" label="Site">
+                <Select style={{ width: 200 }} placeholder="All Sites" allowClear disabled={!clientName}>
+                    {sites.map(s => <Select.Option key={s} value={s}>{s}</Select.Option>)}
+                </Select>
+            </Form.Item>
+            <Form.Item name="dateRange" label="Date Range" rules={[{ required: true }]}>
+                <DatePicker.RangePicker />
+            </Form.Item>
+            <Form.Item>
+                <Button type="primary" htmlType="submit">Generate</Button>
+            </Form.Item>
+        </Form>
+    );
+};
+
+const ReportsPage = () => {
+    const { warehouseStock, customerStock, loading: inventoryLoading } = useInventory();
+    const { data: warehouses, loading: warehousesLoading } = useCollection('warehouses');
+    const { data: customers, loading: customersLoading } = useCollection('customers');
+    const { data: transfers, loading: transfersLoading } = useCollection('transfers');
+    const { data: returns, loading: returnsLoading } = useCollection('returns');
+    const { data: sales, loading: salesLoading } = useCollection('sales');
+    
+    const [rentalReportData, setRentalReportData] = useState([]);
+    const [rentalReportTotal, setRentalReportTotal] = useState(0);
+    const [rentalReportParams, setRentalReportParams] = useState(null);
+    const [transactionDateRange, setTransactionDateRange] = useState(null);
+
+    const loading = inventoryLoading || warehousesLoading || customersLoading || transfersLoading || returnsLoading || salesLoading;
+
+    // --- Inventory Reports Data ---
+    const warehouseInventoryData = useMemo(() => {
+        const data = [];
+        for (const whName in warehouseStock) {
+            const warehouseDetails = warehouses.find(w => w.name === whName);
+            for (const productName in warehouseStock[whName]) {
+                const quantity = warehouseStock[whName][productName];
+                if (quantity > 0) {
+                    data.push({
+                        key: `${whName}-${productName}`,
+                        product: productName,
+                        quantity,
+                        warehouseName: whName,
+                        location: warehouseDetails?.location || 'N/A',
+                    });
+                }
+            }
+        }
+        return data;
+    }, [warehouseStock, warehouses]);
+
+    const customerInventoryData = useMemo(() => {
+        const data = [];
+        for (const customerName in customerStock) {
+            for (const siteName in customerStock[customerName]) {
+                for (const productName in customerStock[customerName][siteName]) {
+                    const quantity = customerStock[customerName][siteName][productName];
+                    if (quantity > 0) {
+                        data.push({
+                            key: `${customerName}-${siteName}-${productName}`,
+                            product: productName,
+                            quantity,
+                            clientName: customerName,
+                            site: siteName,
+                        });
+                    }
+                }
+            }
+        }
+        return data;
+    }, [customerStock]);
+    
+    const totalInventoryData = useMemo(() => {
+        const warehouseData = warehouseInventoryData.map(item => ({
+            ...item,
+            holder: item.warehouseName,
+            location: item.location
+        }));
+        const customerData = customerInventoryData.map(item => ({
+            ...item,
+            holder: item.clientName,
+            location: item.site
+        }));
+        return [...warehouseData, ...customerData];
+    }, [warehouseInventoryData, customerInventoryData]);
+
+    // --- Rentals Reports Data ---
+    const monthlyRentSummary = useMemo(() => {
+        const summary = {};
+        const now = new Date();
+        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+
+        transfers.forEach(t => {
+            const key = `${t.customer}-${t.site}`;
+            if (!summary[key]) {
+                summary[key] = { clientName: t.customer, siteName: t.site, rentalValue: 0 };
+            }
+            summary[key].rentalValue += Number(t.quantity) * Number(t.rentalRate) * daysInMonth;
+        });
+        return Object.values(summary);
+    }, [transfers]);
+
+    const handleGenerateRentalReport = (values) => {
+        const { clientName, siteName, dateRange } = values;
+        if (!clientName || !dateRange) {
+            message.error("Please select a client and a date range.");
+            return;
+        }
+
+        const [start, end] = dateRange;
+        const startDate = start.startOf('day').toDate();
+        const endDate = end.endOf('day').toDate();
+
+        const clientTransfers = transfers.filter(t => 
+            t.customer === clientName &&
+            (!siteName || t.site === siteName)
+        );
+
+        let totalValue = 0;
+        const report = clientTransfers.map((t, index) => {
+            const rentalStartDate = new Date(t.rentalStartDate);
+            
+            const effectiveStartDate = rentalStartDate > startDate ? rentalStartDate : startDate;
+            const effectiveEndDate = endDate;
+            
+            if (effectiveEndDate < effectiveStartDate) return null;
+
+            const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+            const rowTotal = diffDays * Number(t.quantity) * Number(t.rentalRate);
+            totalValue += rowTotal;
+
+            return {
+                key: index,
+                product: t.product,
+                quantity: t.quantity,
+                ratePerDay: t.rentalRate,
+                days: diffDays,
+                total: rowTotal.toFixed(2)
+            };
+        }).filter(Boolean); // remove null entries
+
+        setRentalReportData(report);
+        setRentalReportTotal(totalValue);
+        setRentalReportParams(values);
+    };
+    
+    // --- Overall Transactions Data ---
+    const filteredTransactions = useMemo(() => {
+        if (!transactionDateRange) return [];
+        const [start, end] = transactionDateRange;
+        const startDate = start.startOf('day').toDate();
+        const endDate = end.endOf('day').toDate();
+
+        const all = [
+            ...transfers.map(t => ({...t, type: 'Transfer', date: new Date(t.transferDate), from: t.from, to: `${t.customer} (${t.site})`})),
+            ...returns.map(r => ({...r, type: 'Return', date: new Date(r.returnDate), from: r.customer, to: r.returnTo})),
+            ...sales.map(s => ({...s, type: 'Sale', date: new Date(s.invoiceDate), from: s.fromWarehouse || s.fromCustomer, to: 'Sold'}))
+        ];
+
+        return all.filter(t => t.date >= startDate && t.date <= endDate).sort((a,b) => b.date - a.date);
+    }, [transactionDateRange, transfers, returns, sales]);
+
+    const exportToCSV = (data, filename) => {
+        if (!data || data.length === 0) {
+            message.warn('No data to export.');
+            return;
+        }
+        const headers = Object.keys(data[0]);
+        const csvContent = "data:text/csv;charset=utf-8,"
+            + [
+                headers.join(','),
+                ...data.map(row => headers.map(header => JSON.stringify(row[header])).join(','))
+            ].join('\n');
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `${filename}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    return (
+        <Tabs defaultActiveKey="1">
+            <Tabs.TabPane tab="Inventory" key="1">
+                <Card title="Total Inventory" style={{ marginBottom: 24 }} extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(totalInventoryData, 'total_inventory')}>Export CSV</Button>}>
+                    <Table dataSource={totalInventoryData} columns={[
+                        { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
+                        { title: 'Product', dataIndex: 'product', key: 'product' },
+                        { title: 'Quantity', dataIndex: 'quantity', key: 'quantity' },
+                        { title: 'Warehouse / Client Name', dataIndex: 'holder', key: 'holder' },
+                        { title: 'Location / Site Details', dataIndex: 'location', key: 'location' },
+                    ]} loading={loading} rowKey="key" pagination={false} />
+                </Card>
+                <Card title="Warehouse Inventory" style={{ marginBottom: 24 }} extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(warehouseInventoryData, 'warehouse_inventory')}>Export CSV</Button>}>
+                    <Table dataSource={warehouseInventoryData} columns={[
+                        { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
+                        { title: 'Product', dataIndex: 'product', key: 'product' },
+                        { title: 'Quantity', dataIndex: 'quantity', key: 'quantity' },
+                        { title: 'Warehouse Name', dataIndex: 'warehouseName', key: 'warehouseName' },
+                        { title: 'Location', dataIndex: 'location', key: 'location' },
+                    ]} loading={loading} rowKey="key" pagination={false} />
+                </Card>
+                <Card title="Inventory with Customers" extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(customerInventoryData, 'customer_inventory')}>Export CSV</Button>}>
+                    <Table dataSource={customerInventoryData} columns={[
+                        { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
+                        { title: 'Product', dataIndex: 'product', key: 'product' },
+                        { title: 'Quantity', dataIndex: 'quantity', key: 'quantity' },
+                        { title: 'Client Name', dataIndex: 'clientName', key: 'clientName' },
+                        { title: 'Site', dataIndex: 'site', key: 'site' },
+                    ]} loading={loading} rowKey="key" pagination={false} />
+                </Card>
+            </Tabs.TabPane>
+            <Tabs.TabPane tab="Rentals" key="2">
+                <Card title="Current Month Rental Summary" style={{ marginBottom: 24 }}>
+                    <Table dataSource={monthlyRentSummary} columns={[
+                        { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
+                        { title: 'Client Name', dataIndex: 'clientName', key: 'clientName' },
+                        { title: 'Site Name', dataIndex: 'siteName', key: 'siteName' },
+                        { title: 'Rental Value (INR)', dataIndex: 'rentalValue', key: 'rentalValue', render: val => val.toFixed(2) },
+                    ]} loading={loading} rowKey={r => `${r.clientName}-${r.siteName}`} pagination={false}
+                    summary={pageData => {
+                        const total = pageData.reduce((acc, curr) => acc + curr.rentalValue, 0);
+                        return <Table.Summary.Row><Table.Summary.Cell index={0} colSpan={3}><b>Total</b></Table.Summary.Cell><Table.Summary.Cell index={1}><b>{total.toFixed(2)}</b></Table.Summary.Cell></Table.Summary.Row>
+                    }}
+                    />
+                </Card>
+                <Card title="Generate Detailed Rental Report">
+                    <RentalReportGenerator customers={customers} onFinish={handleGenerateRentalReport} />
+                    {rentalReportData.length > 0 && (
+                        <Card title={`Report for ${rentalReportParams.clientName}`} style={{marginTop: 24}} extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(rentalReportData, `rental_report_${rentalReportParams.clientName}`)}>Export CSV</Button>}>
+                             <Table dataSource={rentalReportData} columns={[
+                                { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
+                                { title: 'Product', dataIndex: 'product', key: 'product' },
+                                { title: 'Quantity', dataIndex: 'quantity', key: 'quantity' },
+                                { title: 'Rate/Day', dataIndex: 'ratePerDay', key: 'ratePerDay' },
+                                { title: 'No. of Days', dataIndex: 'days', key: 'days' },
+                                { title: 'Total (INR)', dataIndex: 'total', key: 'total' },
+                             ]} pagination={false}
+                             summary={() => (
+                                 <Table.Summary.Row>
+                                     <Table.Summary.Cell index={0} colSpan={5}><b>Grand Total</b></Table.Summary.Cell>
+                                     <Table.Summary.Cell index={1}><b>{rentalReportTotal.toFixed(2)}</b></Table.Summary.Cell>
+                                 </Table.Summary.Row>
+                             )}
+                             />
+                        </Card>
+                    )}
+                </Card>
+            </Tabs.TabPane>
+            <Tabs.TabPane tab="Overall Transactions" key="3">
+                 <Card title="Filter Transactions" extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(filteredTransactions, 'transactions_report')}>Export CSV</Button>}>
+                     <Space>
+                        <DatePicker.RangePicker onChange={(dates) => setTransactionDateRange(dates)} />
+                     </Space>
+                     <Table dataSource={filteredTransactions} columns={[
+                         { title: 'Sr. No.', key: 'index', render: (text, record, index) => index + 1 },
+                         { title: 'Date', dataIndex: 'date', key: 'date', render: (date) => new Date(date).toLocaleString() },
+                         { title: 'DC/Invoice No.', dataIndex: 'dcNumber', key: 'dcNumber', render: (val, rec) => rec.dcNumber || rec.invoiceNumber || 'N/A' },
+                         { title: 'Product', dataIndex: 'product', key: 'product' },
+                         { title: 'Quantity', dataIndex: 'quantity', key: 'quantity' },
+                         { title: 'From', dataIndex: 'from', key: 'from' },
+                         { title: 'To', dataIndex: 'to', key: 'to' },
+                     ]} loading={loading} rowKey={r => r.id + r.type} style={{marginTop: 24}}/>
+                 </Card>
+            </Tabs.TabPane>
+        </Tabs>
+    );
+};
+
+const SettingsPage = () => {
+    const { data: users, loading } = useCollection('users');
+    const [logoLink, setLogoLink] = useState('');
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => {
+        const fetchLogoUrl = async () => {
+            const configDocRef = doc(db, "config", "companyLogo");
+            const docSnap = await getDoc(configDocRef);
+            if (docSnap.exists()) {
+                setLogoLink(docSnap.data().url);
+            }
+        };
+        fetchLogoUrl();
+    }, []);
+
+    const handleRoleChange = async (userId, newRole) => {
+        try {
+            const userDocRef = doc(db, "users", userId);
+            await updateDoc(userDocRef, { role: newRole });
+            message.success("User role updated successfully!");
+        } catch (error) {
+            console.error("Error updating role: ", error);
+            message.error("Failed to update user role.");
+        }
+    };
+
+    const handleDeleteUser = (userId) => {
+        Modal.confirm({
+            title: 'Are you sure you want to delete this user?',
+            icon: <ExclamationCircleOutlined />,
+            content: 'This will only remove the user from the application database, not from Firebase Authentication. This must be done manually in the Firebase console.',
+            onOk: async () => {
+                try {
+                    await deleteDoc(doc(db, "users", userId));
+                    message.success("User deleted successfully from app database.");
+                } catch (error) {
+                    message.error("Failed to delete user.");
+                }
+            },
+        });
+    };
+
+    const handleSaveLogo = async () => {
+        if (!logoLink) {
+            message.warn("Please enter a logo URL.");
+            return;
+        }
+        setSaving(true);
+        try {
+            const configDocRef = doc(db, "config", "companyLogo");
+            await setDoc(configDocRef, { url: logoLink, updatedAt: new Date() });
+            message.success("Logo saved successfully!");
+        } catch (error) {
+            console.error("Error saving logo URL: ", error);
+            message.error("Failed to save logo.");
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const columns = [
+        { title: 'Email', dataIndex: 'email', key: 'email' },
+        {
+            title: 'Role',
+            dataIndex: 'role',
+            key: 'role',
+            render: (role, record) => (
+                <Select
+                    defaultValue={role}
+                    style={{ width: 120 }}
+                    onChange={(newRole) => handleRoleChange(record.id, newRole)}
+                    disabled={auth.currentUser?.uid === record.id} // Admin can't change their own role
+                >
+                    <Select.Option value="admin">Admin</Select.Option>
+                    <Select.Option value="user">User</Select.Option>
+                    <Select.Option value="viewer">Viewer</Select.Option>
+                </Select>
+            ),
+        },
+        {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record) => (
+                <Button
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => handleDeleteUser(record.id)}
+                    disabled={auth.currentUser?.uid === record.id}
+                >
+                    Delete
+                </Button>
+            ),
+        }
+    ];
+
+    return (
+        <Row gutter={[24, 24]}>
+            <Col xs={24} lg={12}>
+                <Card title="User Management">
+                    <Table dataSource={users} columns={columns} loading={loading} rowKey="id" />
+                </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+                <Card title="Company Settings">
+                    <h4>Company Logo URL</h4>
+                    <Input 
+                        placeholder="https://example.com/logo.png" 
+                        value={logoLink}
+                        onChange={(e) => setLogoLink(e.target.value)}
+                    />
+                    <Button 
+                        type="primary" 
+                        icon={<SaveOutlined />} 
+                        loading={saving} 
+                        onClick={handleSaveLogo}
+                        style={{marginTop: '12px'}}
+                    >
+                        {saving ? 'Saving...' : 'Save Logo'}
+                    </Button>
+                </Card>
+            </Col>
+        </Row>
+    );
+};
+
+// --- Main App and App Entry Point ---
+const { Sider, Header, Content } = Layout;
+
+const AppContent = () => {
+    const { user, loading } = useAuth();
+
+    if (loading) {
+        return <Layout style={{ minHeight: '100vh', justifyContent: 'center', alignItems: 'center' }}><p>Loading...</p></Layout>;
+    }
+
+    if (!user) {
+        return <LoginPage />;
+    }
+
+    // MainApp component defined inside to ensure hooks are available
+    const MainApp = () => {
+        const [collapsed, setCollapsed] = useState(false);
+        const [current, setCurrent] = useState('dashboard');
+        const { user, userRole } = useAuth();
+        const [logoUrl, setLogoUrl] = useState('');
+        const [isChangePasswordModalVisible, setIsChangePasswordModalVisible] = useState(false);
+        const [changePasswordForm] = Form.useForm();
+
+        useEffect(() => {
+            const configRef = doc(db, "config", "companyLogo");
+            const unsubscribe = onSnapshot(configRef, (doc) => {
+                if (doc.exists()) {
+                    setLogoUrl(doc.data().url);
+                } else {
+                    setLogoUrl('');
+                }
+            });
+            return () => unsubscribe();
+        }, []);
+
+        const handleLogout = async () => {
+            await signOut(auth);
+            message.success('Logged out successfully.');
+        };
+        
+        const handleChangePassword = async (values) => {
+            const { currentPassword, newPassword } = values;
+            const user = auth.currentUser;
+            const credential = EmailAuthProvider.credential(user.email, currentPassword);
+
+            try {
+                await reauthenticateWithCredential(user, credential);
+                await updatePassword(user, newPassword);
+                message.success("Password updated successfully!");
+                setIsChangePasswordModalVisible(false);
+                changePasswordForm.resetFields();
+            } catch (error) {
+                message.error("Failed to change password. Please check your current password.");
+                console.error("Password change error:", error);
+            }
+        };
+
+        const userMenu = (
+            <Menu>
+                <Menu.Item key="changePassword" onClick={() => setIsChangePasswordModalVisible(true)}>
+                    Change Password
+                </Menu.Item>
+                <Menu.Item key="logout" icon={<LogoutOutlined />} onClick={handleLogout}>
+                    Logout
+                </Menu.Item>
+            </Menu>
+        );
+
+        const menuItems = [
+            { key: 'dashboard', icon: <HomeOutlined />, label: 'Dashboard', roles: ['admin', 'user', 'viewer'] },
+            { key: 'products', icon: <ToolOutlined />, label: 'Products', roles: ['admin', 'user', 'viewer'] },
+            { key: 'warehouses', icon: <BuildOutlined />, label: 'Warehouses', roles: ['admin', 'user', 'viewer'] },
+            { key: 'customers', icon: <UsergroupAddOutlined />, label: 'Customers', roles: ['admin', 'user', 'viewer'] },
+            { key: 'purchases', icon: <ShoppingOutlined />, label: 'Purchases', roles: ['admin', 'user'] },
+            { key: 'rentalOrders', icon: <FileDoneOutlined />, label: 'Rental Orders', roles: ['admin', 'user'] },
+            { key: 'transfers', icon: <SwapOutlined />, label: 'Transfers', roles: ['admin', 'user'] },
+            { key: 'returns', icon: <SwapOutlined />, label: 'Returns', roles: ['admin', 'user'] },
+            { key: 'sales', icon: <DollarCircleOutlined />, label: 'Obsolete/Sales', roles: ['admin'] },
+            { key: 'reports', icon: <BarChartOutlined />, label: 'Reports', roles: ['admin', 'viewer'] },
+            { key: 'settings', icon: <SettingOutlined />, label: 'Settings', roles: ['admin'] },
+        ];
+
+        const availableMenuItems = menuItems.filter(item => item.roles.includes(userRole));
+
+        const renderContent = () => {
+            switch (current) {
+                case 'dashboard': return <Dashboard />;
+                case 'products': return <ProductsPage />;
+                case 'warehouses': return <WarehousesPage />;
+                case 'customers': return <CustomersPage />;
+                case 'purchases': return <PurchasesPage />;
+                case 'rentalOrders': return <RentalOrdersPage />;
+                case 'transfers': return <TransfersPage />;
+                case 'returns': return <ReturnsPage />;
+                case 'sales': return <SalesPage />;
+                case 'reports': return <ReportsPage />;
+                case 'settings': return <SettingsPage />;
+                default: return <Dashboard />;
+            }
+        };
+
+        return (
+            <Layout style={{ minHeight: '100vh' }}>
+                <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed}>
+                    <div style={{ height: '64px', margin: '0', display: 'flex', justifyContent: 'center', alignItems: 'center', background: 'rgba(255, 255, 255, 0.2)' }}>
+                        {logoUrl ? (
+                            <img src={logoUrl} alt="Company Logo" style={{ maxHeight: '50px', maxWidth: collapsed ? '50px' : '150px', padding: '5px' }} />
+                        ) : (
+                             <div style={{ color: 'white', fontSize: collapsed ? '12px' : '16px', textAlign: 'center' }}>
+                                {collapsed ? 'SR' : 'Scaffolding Rental'}
+                            </div>
+                        )}
+                    </div>
+                    <Menu theme="dark" selectedKeys={[current]} mode="inline" onClick={(e) => setCurrent(e.key)} items={availableMenuItems} />
+                </Sider>
+                <Layout>
+                    <Header style={{ padding: '0 16px', background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                         <div></div>
+                        <Dropdown overlay={userMenu}>
+                            <a onClick={e => e.preventDefault()}>
+                                <Space>
+                                    Welcome, {user?.email} ({userRole})
+                                    <DownOutlined />
+                                </Space>
+                            </a>
+                        </Dropdown>
+                    </Header>
+                    <Content style={{ margin: '24px 16px 0', overflow: 'initial' }}>
+                        <div style={{ padding: 24, background: '#fff', minHeight: 'calc(100vh - 112px)' }}>
+                            {renderContent()}
+                        </div>
+                    </Content>
+                </Layout>
+                <Modal
+                    title="Change Password"
+                    visible={isChangePasswordModalVisible}
+                    onCancel={() => setIsChangePasswordModalVisible(false)}
+                    footer={null}
+                >
+                    <Form form={changePasswordForm} onFinish={handleChangePassword} layout="vertical">
+                        <Form.Item name="currentPassword" label="Current Password" rules={[{ required: true, message: 'Please enter your current password' }]}>
+                            <Input.Password />
+                        </Form.Item>
+                        <Form.Item name="newPassword" label="New Password" rules={[{ required: true, message: 'Please enter a new password' }]}>
+                            <Input.Password />
+                        </Form.Item>
+                        <Form.Item
+                            name="confirmNewPassword"
+                            label="Confirm New Password"
+                            dependencies={['newPassword']}
+                            rules={[
+                                { required: true, message: 'Please confirm your new password' },
+                                ({ getFieldValue }) => ({
+                                    validator(_, value) {
+                                        if (!value || getFieldValue('newPassword') === value) {
+                                            return Promise.resolve();
+                                        }
+                                        return Promise.reject(new Error('The two passwords that you entered do not match!'));
+                                    },
+                                }),
+                            ]}
+                        >
+                            <Input.Password />
+                        </Form.Item>
+                        <Form.Item>
+                            <Button type="primary" htmlType="submit">Change Password</Button>
+                        </Form.Item>
+                    </Form>
+                </Form>
+            </Modal>
+        </Layout>
+    );
+};
+
+    return <MainApp />;
+}
+
+
+export default function App() {
+    return (
+        <ConfigProvider theme={{ token: { fontSize: 16 } }}>
+            <AntApp>
+                <AuthProvider>
+                    <AppContent />
+                </AuthProvider>
+            </AntApp>
+        </ConfigProvider>
+    );
+}
