@@ -231,8 +231,20 @@ const ReportsPage = () => {
             }
         });
 
-        // Filter only active rentals (status = 'Rented')
-        transfers.filter(t => t.status === 'Rented').forEach(t => {
+        // Filter only active rentals (status = 'Rented') that are still running this month
+        const activeTransfers = transfers.filter(t => {
+            if (t.status !== 'Rented') return false;
+
+            // Check if this rental has ended before this month
+            const rentalEndDate = rentalEndDates[t.customer];
+            if (rentalEndDate && new Date(rentalEndDate) < startOfMonth) {
+                return false; // Rental ended before this month
+            }
+
+            return true;
+        });
+
+        activeTransfers.forEach(t => {
             const items = t.items || (t.product ? [{ product: t.product, quantity: t.quantity, perDayRent: t.perDayRent }] : []);
 
             items.forEach(item => {

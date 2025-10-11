@@ -8,8 +8,9 @@ const Dashboard = () => {
     const { data: purchases, loading: loadingPurchases } = useCollection('purchases');
     const { data: transfers, loading: loadingTransfers } = useCollection('transfers');
     const { data: rentalOrders, loading: loadingOrders } = useCollection('rentalOrders');
+    const { data: returns, loading: loadingReturns } = useCollection('returns');
 
-    const loading = loadingPurchases || loadingTransfers || loadingOrders || inventoryLoading;
+    const loading = loadingPurchases || loadingTransfers || loadingOrders || inventoryLoading || loadingReturns;
 
     const {
         totalInventoryValue,
@@ -75,18 +76,55 @@ const Dashboard = () => {
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
-        const activeTransfers = transfers.filter(t => t.status === 'Rented');
+        // Create a map of rental end dates from returns
+        const rentalEndDates = {};
+        returns.forEach(r => {
+            if (r.rentalEndDate) {
+                const key = `${r.customer}`;
+                if (!rentalEndDates[key] || new Date(r.rentalEndDate) > new Date(rentalEndDates[key])) {
+                    rentalEndDates[key] = r.rentalEndDate;
+                }
+            }
+        });
+
+        // Filter only active rentals (status = 'Rented') that haven't ended yet
+        const activeTransfers = transfers.filter(t => {
+            if (t.status !== 'Rented') return false;
+
+            // Check if this rental has ended
+            const rentalEndDate = rentalEndDates[t.customer];
+            if (rentalEndDate && new Date(rentalEndDate) < startOfMonth) {
+                return false; // Rental ended before this month
+            }
+
+            return true;
+        });
+
         let monthlyValue = 0;
 
         activeTransfers.forEach(t => {
-            const rentalStartDate = new Date(t.rentalStartDate);
-            const effectiveStartDate = rentalStartDate > startOfMonth ? rentalStartDate : startOfMonth;
+            // Handle both old single-item and new multi-item structure
+            const items = t.items || (t.product ? [{ product: t.product, quantity: t.quantity, perDayRent: t.perDayRent }] : []);
 
-            if (effectiveStartDate <= endOfMonth) {
-                const diffTime = Math.abs(endOfMonth - effectiveStartDate);
+            items.forEach(item => {
+                const rentalStartDate = new Date(t.rentalStartDate);
+                const rentalEndDate = rentalEndDates[t.customer] ? new Date(rentalEndDates[t.customer]) : now;
+
+                // Calculate effective start date (later of rental start or month start)
+                const effectiveStartDate = rentalStartDate > startOfMonth ? rentalStartDate : startOfMonth;
+
+                // Calculate effective end date (earlier of rental end or month end)
+                const effectiveEndDate = rentalEndDate < endOfMonth ? rentalEndDate : endOfMonth;
+
+                // If rental started after current month or ended before current month, skip it
+                if (effectiveStartDate > endOfMonth || effectiveEndDate < startOfMonth) return;
+
+                // Calculate days in current month for this rental
+                const diffTime = Math.abs(effectiveEndDate - effectiveStartDate);
                 const daysInCurrentMonth = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                monthlyValue += Number(t.rentalRate || 0) * Number(t.quantity || 0) * daysInCurrentMonth;
-            }
+
+                monthlyValue += Number(item.quantity || 0) * Number(item.perDayRent || 0) * daysInCurrentMonth;
+            });
         });
 
         const pendingOrderCount = rentalOrders.filter(order => {
@@ -102,7 +140,7 @@ const Dashboard = () => {
             monthlyRentalValue: monthlyValue,
             pendingOrders: pendingOrderCount
         };
-    }, [purchases, transfers, rentalOrders, warehouseStock, customerStock, loading]);
+    }, [purchases, transfers, rentalOrders, returns, warehouseStock, customerStock, loading]);
 
     const formatCurrency = (value) => `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
