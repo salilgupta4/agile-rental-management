@@ -52,6 +52,13 @@ const ReturnsPage = () => {
     const handleOk = async () => {
         try {
             const values = await form.validateFields();
+
+            // Validate that at least one item is present
+            if (!values.items || values.items.length === 0) {
+                message.error('Please add at least one product to the return.');
+                return;
+            }
+
             const returnData = {
                 ...values,
                 returnDate: values.returnDate.toISOString(),

@@ -92,6 +92,12 @@ const SalesPage = () => {
         try {
             const values = await form.validateFields();
 
+            // Validate that at least one item is present
+            if (!values.items || values.items.length === 0) {
+                message.error('Please add at least one product to the sale.');
+                return;
+            }
+
             // Calculate total base amount
             const baseAmount = (values.items || []).reduce((sum, item) => sum + (item.quantity * item.salePrice), 0);
             const taxType = values.taxType || 'local';
