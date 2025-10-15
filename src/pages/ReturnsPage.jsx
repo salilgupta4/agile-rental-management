@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Table, Button, Modal, Form, Select, DatePicker, InputNumber, Space, Row, Col, Divider, message } from 'antd';
-import { DeleteOutlined, EditOutlined, ExclamationCircleOutlined, MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, ExclamationCircleOutlined, MinusCircleOutlined, PlusOutlined, FileExcelOutlined } from '@ant-design/icons';
 import { collection, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import dayjs from 'dayjs';
 import { db } from '../services/firebase';
@@ -229,8 +229,49 @@ const ReturnsPage = () => {
         }
     ];
 
+    const exportToCSV = () => {
+        if (!returns || returns.length === 0) {
+            message.warn('No data to export.');
+            return;
+        }
+
+        const headers = ['Customer', 'Product', 'Quantity', 'Return To', 'Rental End Date', 'Return Date'];
+        const csvRows = [];
+
+        returns.forEach(returnRecord => {
+            // Handle both old and new structure
+            let items = returnRecord.items || [];
+            if (!items.length && returnRecord.product) {
+                items = [{ product: returnRecord.product, quantity: returnRecord.quantity }];
+            }
+
+            items.forEach(item => {
+                csvRows.push([
+                    returnRecord.customer,
+                    item.product,
+                    item.quantity,
+                    returnRecord.returnTo,
+                    new Date(returnRecord.rentalEndDate).toLocaleString(),
+                    new Date(returnRecord.returnDate).toLocaleString()
+                ].map(field => JSON.stringify(field)).join(','));
+            });
+        });
+
+        const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...csvRows].join('\n');
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "returns.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        message.success('Returns exported successfully!');
+    };
+
     return (
-        <Card title="Material Returns">
+        <Card title="Material Returns" extra={
+            <Button icon={<FileExcelOutlined />} onClick={exportToCSV}>Export CSV</Button>
+        }>
             {canCreate(MODULES.RETURNS) &&
                 <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>New Return</Button>
             }

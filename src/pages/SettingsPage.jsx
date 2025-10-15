@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Table, Button, Modal, Input, Select, Row, Col, message, InputNumber, Switch, Space, Divider, Checkbox, Typography, Form, Tabs } from 'antd';
-import { DeleteOutlined, ExclamationCircleOutlined, SaveOutlined, SettingOutlined, PlusOutlined, KeyOutlined, MailOutlined, LockOutlined } from '@ant-design/icons';
-import { doc, getDoc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { DeleteOutlined, ExclamationCircleOutlined, SaveOutlined, SettingOutlined, PlusOutlined, KeyOutlined, MailOutlined, LockOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, ClearOutlined } from '@ant-design/icons';
+import { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { db, auth } from '../services/firebase';
 import { useCollection } from '../hooks/useCollection';
@@ -280,6 +280,141 @@ const SettingsPage = () => {
         setChangePasswordModalVisible(true);
     };
 
+    // Data Management Functions
+    const COLLECTIONS = ['products', 'warehouses', 'customers', 'purchases', 'transfers', 'returns', 'sales', 'rentalOrders', 'config'];
+
+    const handleExportAllData = async () => {
+        try {
+            message.loading('Exporting all data...', 0);
+            const allData = {};
+
+            for (const collectionName of COLLECTIONS) {
+                const querySnapshot = await getDocs(collection(db, collectionName));
+                allData[collectionName] = querySnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+            }
+
+            const dataStr = JSON.stringify(allData, null, 2);
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `backup_${new Date().toISOString()}.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+
+            message.destroy();
+            message.success('Data exported successfully!');
+        } catch (error) {
+            message.destroy();
+            console.error('Export error:', error);
+            message.error('Failed to export data.');
+        }
+    };
+
+    const handleImportData = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'application/json';
+        input.onchange = async (e) => {
+            try {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                message.loading('Importing data...', 0);
+                const reader = new FileReader();
+
+                reader.onload = async (event) => {
+                    try {
+                        const importedData = JSON.parse(event.target.result);
+
+                        for (const collectionName of Object.keys(importedData)) {
+                            if (!COLLECTIONS.includes(collectionName)) continue;
+
+                            const data = importedData[collectionName];
+                            for (const item of data) {
+                                const { id, ...itemData } = item;
+                                if (id) {
+                                    await setDoc(doc(db, collectionName, id), itemData);
+                                }
+                            }
+                        }
+
+                        message.destroy();
+                        message.success('Data imported successfully!');
+                        window.location.reload();
+                    } catch (parseError) {
+                        message.destroy();
+                        console.error('Parse error:', parseError);
+                        message.error('Invalid file format.');
+                    }
+                };
+
+                reader.readAsText(file);
+            } catch (error) {
+                message.destroy();
+                console.error('Import error:', error);
+                message.error('Failed to import data.');
+            }
+        };
+        input.click();
+    };
+
+    const handleEraseAllData = () => {
+        Modal.confirm({
+            title: 'Erase All Data?',
+            icon: <ExclamationCircleOutlined style={{ color: 'red' }} />,
+            content: 'This will permanently delete all data from the system. This action CANNOT be undone! Are you absolutely sure?',
+            okText: 'Yes, Erase Everything',
+            okType: 'danger',
+            cancelText: 'Cancel',
+            onOk: async () => {
+                try {
+                    message.loading('Erasing all data...', 0);
+
+                    for (const collectionName of COLLECTIONS) {
+                        if (collectionName === 'config') continue; // Skip config
+                        const querySnapshot = await getDocs(collection(db, collectionName));
+                        const batch = writeBatch(db);
+                        querySnapshot.docs.forEach((document) => {
+                            batch.delete(doc(db, collectionName, document.id));
+                        });
+                        await batch.commit();
+                    }
+
+                    message.destroy();
+                    message.success('All data erased successfully!');
+                    window.location.reload();
+                } catch (error) {
+                    message.destroy();
+                    console.error('Erase error:', error);
+                    message.error('Failed to erase data.');
+                }
+            }
+        });
+    };
+
+    const handleBackupData = async () => {
+        await handleExportAllData(); // Backup is same as export
+    };
+
+    const handleRestoreData = () => {
+        Modal.confirm({
+            title: 'Restore Data from Backup?',
+            icon: <ExclamationCircleOutlined />,
+            content: 'This will restore data from a backup file. Existing data will be overwritten. Continue?',
+            okText: 'Restore',
+            cancelText: 'Cancel',
+            onOk: () => {
+                handleImportData();
+            }
+        });
+    };
+
     const columns = [
         { title: 'Email', dataIndex: 'email', key: 'email' },
         {
@@ -478,6 +613,120 @@ const SettingsPage = () => {
                                 </Button>
                             </Form.Item>
                         </Form>
+                    </Card>
+                </Tabs.TabPane>
+
+                <Tabs.TabPane tab="Data Management" key="4">
+                    <Card title="Data Management" icon={<DatabaseOutlined />}>
+                        <Typography.Paragraph type="warning">
+                            <strong>Warning:</strong> These operations affect all system data. Use with caution!
+                        </Typography.Paragraph>
+
+                        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                            <Card size="small" style={{ backgroundColor: '#f5f5f5' }}>
+                                <Row gutter={16}>
+                                    <Col span={16}>
+                                        <Title level={5}>Export All Data</Title>
+                                        <Typography.Text>
+                                            Download all system data as a JSON file. This includes products, warehouses, customers, transactions, and configuration.
+                                        </Typography.Text>
+                                    </Col>
+                                    <Col span={8} style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                                        <Button
+                                            type="primary"
+                                            icon={<DownloadOutlined />}
+                                            onClick={handleExportAllData}
+                                        >
+                                            Export Data
+                                        </Button>
+                                    </Col>
+                                </Row>
+                            </Card>
+
+                            <Card size="small" style={{ backgroundColor: '#f5f5f5' }}>
+                                <Row gutter={16}>
+                                    <Col span={16}>
+                                        <Title level={5}>Import Data</Title>
+                                        <Typography.Text>
+                                            Import data from a JSON file. This will add or update existing records with the imported data.
+                                        </Typography.Text>
+                                    </Col>
+                                    <Col span={8} style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                                        <Button
+                                            type="default"
+                                            icon={<UploadOutlined />}
+                                            onClick={handleImportData}
+                                        >
+                                            Import Data
+                                        </Button>
+                                    </Col>
+                                </Row>
+                            </Card>
+
+                            <Divider />
+
+                            <Card size="small" style={{ backgroundColor: '#e6f7ff' }}>
+                                <Row gutter={16}>
+                                    <Col span={16}>
+                                        <Title level={5}>Backup Data</Title>
+                                        <Typography.Text>
+                                            Create a backup of all system data with a timestamp. Same as Export, but specifically for backup purposes.
+                                        </Typography.Text>
+                                    </Col>
+                                    <Col span={8} style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                                        <Button
+                                            type="primary"
+                                            icon={<DatabaseOutlined />}
+                                            onClick={handleBackupData}
+                                        >
+                                            Create Backup
+                                        </Button>
+                                    </Col>
+                                </Row>
+                            </Card>
+
+                            <Card size="small" style={{ backgroundColor: '#fff7e6' }}>
+                                <Row gutter={16}>
+                                    <Col span={16}>
+                                        <Title level={5}>Restore Data</Title>
+                                        <Typography.Text>
+                                            Restore data from a previously created backup file. This will overwrite existing data.
+                                        </Typography.Text>
+                                    </Col>
+                                    <Col span={8} style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                                        <Button
+                                            type="default"
+                                            icon={<UploadOutlined />}
+                                            onClick={handleRestoreData}
+                                        >
+                                            Restore Backup
+                                        </Button>
+                                    </Col>
+                                </Row>
+                            </Card>
+
+                            <Divider />
+
+                            <Card size="small" style={{ backgroundColor: '#fff1f0', borderColor: '#ffccc7' }}>
+                                <Row gutter={16}>
+                                    <Col span={16}>
+                                        <Title level={5} style={{ color: '#cf1322' }}>Erase All Data</Title>
+                                        <Typography.Text type="danger">
+                                            <strong>DANGER ZONE:</strong> This will permanently delete ALL data from the system. This action cannot be undone!
+                                        </Typography.Text>
+                                    </Col>
+                                    <Col span={8} style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                                        <Button
+                                            danger
+                                            icon={<ClearOutlined />}
+                                            onClick={handleEraseAllData}
+                                        >
+                                            Erase All Data
+                                        </Button>
+                                    </Col>
+                                </Row>
+                            </Card>
+                        </Space>
                     </Card>
                 </Tabs.TabPane>
             </Tabs>

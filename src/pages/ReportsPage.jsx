@@ -5,6 +5,7 @@ import { useCollection } from '../hooks/useCollection';
 import { useInventory } from '../hooks/useInventory';
 import { useGST } from '../hooks/useGST';
 import { formatDate } from '../utils/helpers';
+import dayjs from 'dayjs';
 
 const RentalReportGenerator = ({ customers, onFinish }) => {
     const [form] = Form.useForm();
@@ -43,6 +44,7 @@ const ReportsPage = () => {
     const { warehouseStock, customerStock, loading: inventoryLoading } = useInventory();
     const { data: warehouses, loading: warehousesLoading } = useCollection('warehouses');
     const { data: customers, loading: customersLoading } = useCollection('customers');
+    const { data: products, loading: productsLoading } = useCollection('products');
     const { data: transfers, loading: transfersLoading } = useCollection('transfers');
     const { data: returns, loading: returnsLoading } = useCollection('returns');
     const { data: sales, loading: salesLoading } = useCollection('sales');
@@ -53,9 +55,18 @@ const ReportsPage = () => {
     const [rentalReportData, setRentalReportData] = useState([]);
     const [rentalReportTotal, setRentalReportTotal] = useState(0);
     const [rentalReportParams, setRentalReportParams] = useState(null);
-    const [transactionDateRange, setTransactionDateRange] = useState(null);
 
-    const loading = inventoryLoading || warehousesLoading || customersLoading || transfersLoading || returnsLoading || salesLoading || purchasesLoading || rentalOrdersLoading;
+    // Set current month as default for transaction date range
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const [transactionDateRange, setTransactionDateRange] = useState([dayjs(startOfMonth), dayjs(endOfMonth)]);
+
+    // Product-wise report state
+    const [selectedProduct, setSelectedProduct] = useState(null);
+    const [productDateRange, setProductDateRange] = useState([dayjs(startOfMonth), dayjs(endOfMonth)]);
+
+    const loading = inventoryLoading || warehousesLoading || customersLoading || productsLoading || transfersLoading || returnsLoading || salesLoading || purchasesLoading || rentalOrdersLoading;
 
     // Helper function to format currency
     const formatCurrency = (value) => {
@@ -548,14 +559,139 @@ const ReportsPage = () => {
         const endDate = end.endOf('day').toDate();
 
         const all = [
-            ...purchases.map(p => ({...p, type: 'Purchase', date: new Date(p.purchaseDate), reference: p.invoiceNumber, description: `Purchase to ${p.warehouse}`, from: 'Supplier', to: p.warehouse})),
-            ...transfers.map(t => ({...t, type: 'Transfer', date: new Date(t.transferDate), reference: t.dcNumber, description: `${t.product} (${t.quantity})`, from: t.from, to: `${t.customer} (${t.site})`})),
-            ...returns.map(r => ({...r, type: 'Return', date: new Date(r.returnDate), reference: r.dcNumber, description: `${r.product} (${r.quantity})`, from: r.customer, to: r.returnTo})),
-            ...sales.map(s => ({...s, type: 'Sale', date: new Date(s.invoiceDate), reference: s.invoiceNumber, description: `Sale from ${s.fromWarehouse || s.fromCustomer}`, from: s.fromWarehouse || s.fromCustomer, to: 'Sold'}))
+            ...purchases.map(p => {
+                const productNames = p.items?.map(item => item.product).join(', ') || 'N/A';
+                const quantities = p.items?.map(item => item.quantity).join(', ') || 'N/A';
+                return {...p, type: 'Purchase', date: new Date(p.purchaseDate), reference: p.invoiceNumber, description: `Purchase to ${p.warehouse}`, from: 'Supplier', to: p.warehouse, productNames, quantities};
+            }),
+            ...transfers.map(t => {
+                const productNames = t.items?.map(item => item.product).join(', ') || t.product || 'N/A';
+                const quantities = t.items?.map(item => item.quantity).join(', ') || t.quantity || 'N/A';
+                return {...t, type: 'Transfer', date: new Date(t.transferDate), reference: t.dcNumber, description: `${t.product} (${t.quantity})`, from: t.from, to: `${t.customer} (${t.site})`, productNames, quantities};
+            }),
+            ...returns.map(r => {
+                const productNames = r.items?.map(item => item.product).join(', ') || r.product || 'N/A';
+                const quantities = r.items?.map(item => item.quantity).join(', ') || r.quantity || 'N/A';
+                return {...r, type: 'Return', date: new Date(r.returnDate), reference: r.dcNumber, description: `${r.product} (${r.quantity})`, from: r.customer, to: r.returnTo, productNames, quantities};
+            }),
+            ...sales.map(s => {
+                const productNames = s.items?.map(item => item.product).join(', ') || 'N/A';
+                const quantities = s.items?.map(item => item.quantity).join(', ') || 'N/A';
+                return {...s, type: 'Sale', date: new Date(s.invoiceDate), reference: s.invoiceNumber, description: `Sale from ${s.fromWarehouse || s.fromCustomer}`, from: s.fromWarehouse || s.fromCustomer, to: 'Sold', productNames, quantities};
+            })
         ];
 
         return all.filter(t => t.date >= startDate && t.date <= endDate).sort((a,b) => b.date - a.date);
     }, [transactionDateRange, transfers, returns, sales, purchases]);
+
+    // --- Product-Wise Transactions Data ---
+    const productWiseTransactions = useMemo(() => {
+        if (!selectedProduct || !productDateRange) return [];
+
+        const [start, end] = productDateRange;
+        const startDate = start.startOf('day').toDate();
+        const endDate = end.endOf('day').toDate();
+
+        const transactions = [];
+
+        // Filter purchases
+        purchases.forEach(p => {
+            const purchaseDate = new Date(p.purchaseDate);
+            if (purchaseDate >= startDate && purchaseDate <= endDate) {
+                const items = p.items || [];
+                items.forEach(item => {
+                    if (item.product === selectedProduct) {
+                        transactions.push({
+                            id: p.id,
+                            date: purchaseDate,
+                            type: 'Purchase',
+                            reference: p.invoiceNumber || 'N/A',
+                            product: item.product,
+                            quantity: item.quantity,
+                            from: 'Supplier',
+                            to: p.warehouse,
+                            unitPrice: item.unitPrice,
+                            totalAmount: (item.quantity * item.unitPrice) || 0
+                        });
+                    }
+                });
+            }
+        });
+
+        // Filter transfers
+        transfers.forEach(t => {
+            const transferDate = new Date(t.transferDate);
+            if (transferDate >= startDate && transferDate <= endDate) {
+                const items = t.items || (t.product ? [{ product: t.product, quantity: t.quantity, perDayRent: t.perDayRent }] : []);
+                items.forEach(item => {
+                    if (item.product === selectedProduct) {
+                        transactions.push({
+                            id: t.id,
+                            date: transferDate,
+                            type: 'Transfer',
+                            reference: t.dcNumber || 'N/A',
+                            product: item.product,
+                            quantity: item.quantity,
+                            from: t.from,
+                            to: `${t.customer} (${t.site})`,
+                            unitPrice: item.perDayRent || 0,
+                            totalAmount: 0 // Transfers don't have a total amount
+                        });
+                    }
+                });
+            }
+        });
+
+        // Filter returns
+        returns.forEach(r => {
+            const returnDate = new Date(r.returnDate);
+            if (returnDate >= startDate && returnDate <= endDate) {
+                const items = r.items || (r.product ? [{ product: r.product, quantity: r.quantity }] : []);
+                items.forEach(item => {
+                    if (item.product === selectedProduct) {
+                        transactions.push({
+                            id: r.id,
+                            date: returnDate,
+                            type: 'Return',
+                            reference: r.dcNumber || 'N/A',
+                            product: item.product,
+                            quantity: item.quantity,
+                            from: r.customer,
+                            to: r.returnTo,
+                            unitPrice: 0,
+                            totalAmount: 0
+                        });
+                    }
+                });
+            }
+        });
+
+        // Filter sales
+        sales.forEach(s => {
+            const saleDate = new Date(s.invoiceDate);
+            if (saleDate >= startDate && saleDate <= endDate) {
+                const items = s.items || [];
+                items.forEach(item => {
+                    if (item.product === selectedProduct) {
+                        transactions.push({
+                            id: s.id,
+                            date: saleDate,
+                            type: 'Sale',
+                            reference: s.invoiceNumber || 'N/A',
+                            product: item.product,
+                            quantity: item.quantity,
+                            from: s.fromWarehouse || s.fromCustomer || 'N/A',
+                            to: 'Sold',
+                            unitPrice: item.salePrice || 0,
+                            totalAmount: (item.quantity * item.salePrice) || 0
+                        });
+                    }
+                });
+            }
+        });
+
+        return transactions.sort((a, b) => b.date - a.date);
+    }, [selectedProduct, productDateRange, purchases, transfers, returns, sales]);
 
     const exportToCSV = (data, filename) => {
         if (!data || data.length === 0) {
@@ -565,18 +701,16 @@ const ReportsPage = () => {
 
         // Special handling for transactions export with GST columns
         if (filename === 'transactions_report') {
-            const headers = ['Date', 'Type', 'Reference', 'Description', 'Base Amount (₹)', 'CGST (₹)', 'SGST (₹)', 'IGST (₹)', 'Total GST (₹)', 'Total Amount (₹)'];
+            const headers = ['Date', 'Type', 'Reference', 'Product', 'Quantity', 'Base Amount (₹)', 'Total GST (₹)', 'Total Amount (₹)'];
             const csvRows = data.map(row => {
                 const gst = getGSTBreakdown(row);
                 return [
                     new Date(row.date).toLocaleString(),
                     row.type,
                     row.reference || 'N/A',
-                    row.description || 'N/A',
+                    row.productNames || 'N/A',
+                    row.quantities || 'N/A',
                     gst ? gst.baseAmount.toFixed(2) : '0.00',
-                    gst ? gst.cgst.toFixed(2) : '0.00',
-                    gst ? gst.sgst.toFixed(2) : '0.00',
-                    gst ? gst.igst.toFixed(2) : '0.00',
                     gst ? gst.totalGST.toFixed(2) : '0.00',
                     gst ? gst.totalAmount.toFixed(2) : '0.00'
                 ].map(field => JSON.stringify(field)).join(',');
@@ -834,7 +968,7 @@ const ReportsPage = () => {
             <Tabs.TabPane tab="Overall Transactions" key="3">
                  <Card title="Filter Transactions" extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(filteredTransactions, 'transactions_report')}>Export CSV</Button>}>
                      <Space>
-                        <DatePicker.RangePicker onChange={(dates) => setTransactionDateRange(dates)} />
+                        <DatePicker.RangePicker value={transactionDateRange} onChange={(dates) => setTransactionDateRange(dates)} />
                      </Space>
                      <Table
                         dataSource={filteredTransactions}
@@ -857,7 +991,16 @@ const ReportsPage = () => {
                                 width: 100
                             },
                             { title: 'Reference', key: 'reference', render: (_, rec) => rec.reference || 'N/A', width: 120 },
-                            { title: 'Description', key: 'description', render: (_, rec) => rec.description || 'N/A', width: 200 },
+                            {
+                                title: 'Product',
+                                key: 'product',
+                                dataIndex: 'productNames',
+                                width: 200,
+                                sorter: (a, b) => (a.productNames || '').localeCompare(b.productNames || ''),
+                                filters: [...new Set(filteredTransactions.map(item => item.productNames).filter(p => p && p !== 'N/A'))].map(p => ({ text: p, value: p })),
+                                onFilter: (value, record) => record.productNames === value,
+                            },
+                            { title: 'Quantity', key: 'quantity', dataIndex: 'quantities', width: 100 },
                             {
                                 title: 'Base Amount (₹)',
                                 key: 'baseAmount',
@@ -866,36 +1009,6 @@ const ReportsPage = () => {
                                     return gst ? formatCurrency(gst.baseAmount) : '-';
                                 },
                                 width: 120,
-                                align: 'right'
-                            },
-                            {
-                                title: 'CGST (₹)',
-                                key: 'cgst',
-                                render: (_, rec) => {
-                                    const gst = getGSTBreakdown(rec);
-                                    return gst ? formatCurrency(gst.cgst) : '-';
-                                },
-                                width: 100,
-                                align: 'right'
-                            },
-                            {
-                                title: 'SGST (₹)',
-                                key: 'sgst',
-                                render: (_, rec) => {
-                                    const gst = getGSTBreakdown(rec);
-                                    return gst ? formatCurrency(gst.sgst) : '-';
-                                },
-                                width: 100,
-                                align: 'right'
-                            },
-                            {
-                                title: 'IGST (₹)',
-                                key: 'igst',
-                                render: (_, rec) => {
-                                    const gst = getGSTBreakdown(rec);
-                                    return gst ? formatCurrency(gst.igst) : '-';
-                                },
-                                width: 100,
                                 align: 'right'
                             },
                             {
@@ -922,10 +1035,156 @@ const ReportsPage = () => {
                         loading={loading}
                         rowKey={r => r.id + r.type}
                         style={{marginTop: 24}}
-                        scroll={{ x: 1600 }}
+                        scroll={{ x: 1400 }}
                         pagination={{ pageSize: 20 }}
                      />
                  </Card>
+            </Tabs.TabPane>
+            <Tabs.TabPane tab="Product-Wise Report" key="4">
+                <Card title="Product-Wise Transactions">
+                    <Space style={{ marginBottom: 16 }}>
+                        <Select
+                            style={{ width: 250 }}
+                            placeholder="Select Product"
+                            value={selectedProduct}
+                            onChange={setSelectedProduct}
+                            allowClear
+                            showSearch
+                            filterOption={(input, option) =>
+                                option.children.toLowerCase().includes(input.toLowerCase())
+                            }
+                        >
+                            {products.map(p => (
+                                <Select.Option key={p.id} value={p.name}>
+                                    {p.name}
+                                </Select.Option>
+                            ))}
+                        </Select>
+                        <DatePicker.RangePicker
+                            value={productDateRange}
+                            onChange={(dates) => setProductDateRange(dates)}
+                        />
+                    </Space>
+
+                    {selectedProduct && productWiseTransactions.length > 0 && (
+                        <Card
+                            title={`Transactions for ${selectedProduct}`}
+                            style={{marginTop: 16}}
+                            extra={<Button icon={<FileExcelOutlined />} onClick={() => exportToCSV(productWiseTransactions.map(t => ({
+                                Date: new Date(t.date).toLocaleString(),
+                                Type: t.type,
+                                Reference: t.reference,
+                                Quantity: t.quantity,
+                                From: t.from,
+                                To: t.to,
+                                'Unit Price (₹)': t.unitPrice,
+                                'Total Amount (₹)': t.totalAmount
+                            })), `product_${selectedProduct}_transactions`)}>Export CSV</Button>}
+                        >
+                            <Table
+                                dataSource={productWiseTransactions}
+                                columns={[
+                                    {
+                                        title: 'Sr. No.',
+                                        key: 'index',
+                                        render: (text, record, index) => index + 1,
+                                        width: 70
+                                    },
+                                    {
+                                        title: 'Date',
+                                        dataIndex: 'date',
+                                        key: 'date',
+                                        render: (date) => formatDate(date),
+                                        sorter: (a, b) => a.date - b.date,
+                                        width: 150
+                                    },
+                                    {
+                                        title: 'Type',
+                                        dataIndex: 'type',
+                                        key: 'type',
+                                        filters: [...new Set(productWiseTransactions.map(item => item.type))].map(t => ({ text: t, value: t })),
+                                        onFilter: (value, record) => record.type === value,
+                                        width: 120
+                                    },
+                                    {
+                                        title: 'Reference',
+                                        dataIndex: 'reference',
+                                        key: 'reference',
+                                        width: 130
+                                    },
+                                    {
+                                        title: 'Quantity',
+                                        dataIndex: 'quantity',
+                                        key: 'quantity',
+                                        width: 100,
+                                        sorter: (a, b) => a.quantity - b.quantity
+                                    },
+                                    {
+                                        title: 'From',
+                                        dataIndex: 'from',
+                                        key: 'from',
+                                        width: 150
+                                    },
+                                    {
+                                        title: 'To',
+                                        dataIndex: 'to',
+                                        key: 'to',
+                                        width: 200
+                                    },
+                                    {
+                                        title: 'Unit Price (₹)',
+                                        dataIndex: 'unitPrice',
+                                        key: 'unitPrice',
+                                        render: (val) => formatCurrency(val),
+                                        width: 130,
+                                        align: 'right'
+                                    },
+                                    {
+                                        title: 'Total Amount (₹)',
+                                        dataIndex: 'totalAmount',
+                                        key: 'totalAmount',
+                                        render: (val) => formatCurrency(val),
+                                        width: 150,
+                                        align: 'right'
+                                    }
+                                ]}
+                                loading={loading}
+                                rowKey={(record) => `${record.id}-${record.type}`}
+                                scroll={{ x: 1200 }}
+                                pagination={{ pageSize: 20 }}
+                                summary={pageData => {
+                                    const totalPurchased = pageData.filter(t => t.type === 'Purchase').reduce((sum, t) => sum + Number(t.quantity), 0);
+                                    const totalTransferred = pageData.filter(t => t.type === 'Transfer').reduce((sum, t) => sum + Number(t.quantity), 0);
+                                    const totalReturned = pageData.filter(t => t.type === 'Return').reduce((sum, t) => sum + Number(t.quantity), 0);
+                                    const totalSold = pageData.filter(t => t.type === 'Sale').reduce((sum, t) => sum + Number(t.quantity), 0);
+
+                                    return (
+                                        <>
+                                            <Table.Summary.Row>
+                                                <Table.Summary.Cell index={0} colSpan={4}><b>Summary</b></Table.Summary.Cell>
+                                                <Table.Summary.Cell index={1} colSpan={5}>
+                                                    <b>Purchased: {totalPurchased} | Transferred: {totalTransferred} | Returned: {totalReturned} | Sold: {totalSold}</b>
+                                                </Table.Summary.Cell>
+                                            </Table.Summary.Row>
+                                        </>
+                                    );
+                                }}
+                            />
+                        </Card>
+                    )}
+
+                    {selectedProduct && productWiseTransactions.length === 0 && (
+                        <Card style={{marginTop: 16}}>
+                            <p>No transactions found for this product in the selected period.</p>
+                        </Card>
+                    )}
+
+                    {!selectedProduct && (
+                        <Card style={{marginTop: 16}}>
+                            <p>Please select a product to view its transactions.</p>
+                        </Card>
+                    )}
+                </Card>
             </Tabs.TabPane>
         </Tabs>
     );

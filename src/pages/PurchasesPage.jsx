@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, Row, Col, Divider, Space, InputNumber, message, Popconfirm, Radio } from 'antd';
-import { EditOutlined, MinusCircleOutlined, PlusOutlined, DeleteOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
+import { EditOutlined, MinusCircleOutlined, PlusOutlined, DeleteOutlined, ExclamationCircleOutlined, FileExcelOutlined } from '@ant-design/icons';
 import { collection, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import dayjs from 'dayjs';
 import { db } from '../services/firebase';
@@ -249,8 +249,55 @@ const PurchasesPage = () => {
         }
     ], [purchases, warehouses, canEdit, canDelete, calculateGST, gstRates]);
 
+    const exportToCSV = () => {
+        if (!purchases || purchases.length === 0) {
+            message.warn('No data to export.');
+            return;
+        }
+
+        const headers = ['Invoice No.', 'Warehouse', 'Purchase Date', 'Product', 'Quantity', 'Unit Price (₹)', 'Base Amount (₹)', 'CGST (₹)', 'SGST (₹)', 'IGST (₹)', 'Total GST (₹)', 'Total Amount (₹)'];
+        const csvRows = [];
+
+        purchases.forEach(purchase => {
+            const gstData = purchase.gstBreakdown || (() => {
+                const baseAmount = (purchase.items || []).reduce((acc, item) => acc + (item.quantity * item.unitPrice), 0);
+                const taxType = purchase.taxType || 'local';
+                return calculateGST(baseAmount, taxType);
+            })();
+
+            purchase.items?.forEach(item => {
+                csvRows.push([
+                    purchase.invoiceNumber,
+                    purchase.warehouse,
+                    new Date(purchase.purchaseDate).toLocaleString(),
+                    item.product,
+                    item.quantity,
+                    item.unitPrice.toFixed(2),
+                    gstData.baseAmount.toFixed(2),
+                    gstData.cgst.toFixed(2),
+                    gstData.sgst.toFixed(2),
+                    gstData.igst.toFixed(2),
+                    gstData.totalGST.toFixed(2),
+                    gstData.totalAmount.toFixed(2)
+                ].map(field => JSON.stringify(field)).join(','));
+            });
+        });
+
+        const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...csvRows].join('\n');
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "purchases.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        message.success('Purchases exported successfully!');
+    };
+
     return (
-        <Card title="Purchases">
+        <Card title="Purchases" extra={
+            <Button icon={<FileExcelOutlined />} onClick={exportToCSV}>Export CSV</Button>
+        }>
             {canCreate(MODULES.PURCHASES) &&
                 <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>Record Purchase</Button>
             }

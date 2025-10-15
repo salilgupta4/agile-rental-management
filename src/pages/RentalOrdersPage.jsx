@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, Row, Col, Divider, Space, InputNumber, Tag, message, Radio, Alert } from 'antd';
-import { DeleteOutlined, EditOutlined, ExclamationCircleOutlined, MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import { Card, Table, Button, Modal, Form, Input, Select, Row, Col, Divider, Space, InputNumber, Tag, message, Radio, Alert, Tooltip } from 'antd';
+import { DeleteOutlined, EditOutlined, ExclamationCircleOutlined, MinusCircleOutlined, PlusOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { collection, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useCollection } from '../hooks/useCollection';
@@ -234,27 +234,48 @@ const RentalOrdersPage = () => {
         {
             title: 'Actions',
             key: 'actions',
+            align: 'left',
+            width: 150,
             render: (_, record) => {
                 const totalOrdered = record.items.reduce((sum, item) => sum + Number(item.quantity), 0);
                 const totalDelivered = record.items.reduce((sum, item) => sum + Number(item.deliveredQuantity || 0), 0);
                 const isPartiallyFulfilled = totalDelivered > 0 && totalDelivered < totalOrdered && record.status !== 'Part Fulfilled & Closed';
 
                 return (
-                    <Space>
+                    <Space size="small">
                         {canEdit(MODULES.RENTAL_ORDERS) && (
-                            <Button icon={<EditOutlined />} onClick={() => handleEdit(record)}>
-                                Edit
-                            </Button>
-                        )}
-                        {isPartiallyFulfilled && canEdit(MODULES.RENTAL_ORDERS) && (
-                            <Button type="default" onClick={() => handleForceClose(record.id)}>
-                                Force Close
-                            </Button>
+                            <Tooltip title="Edit Order">
+                                <Button
+                                    type="primary"
+                                    icon={<EditOutlined />}
+                                    onClick={() => handleEdit(record)}
+                                    size="small"
+                                    shape="circle"
+                                />
+                            </Tooltip>
                         )}
                         {canDelete(MODULES.RENTAL_ORDERS) && (
-                            <Button danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>
-                                Delete
-                            </Button>
+                            <Tooltip title="Delete Order">
+                                <Button
+                                    danger
+                                    icon={<DeleteOutlined />}
+                                    onClick={() => handleDelete(record.id)}
+                                    size="small"
+                                    shape="circle"
+                                />
+                            </Tooltip>
+                        )}
+                        {isPartiallyFulfilled && canEdit(MODULES.RENTAL_ORDERS) && (
+                            <Tooltip title="Force Close Order">
+                                <Button
+                                    type="default"
+                                    icon={<CheckCircleOutlined />}
+                                    onClick={() => handleForceClose(record.id)}
+                                    size="small"
+                                    shape="circle"
+                                    style={{ color: '#1890ff', borderColor: '#1890ff' }}
+                                />
+                            </Tooltip>
                         )}
                     </Space>
                 );

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Space, Row, Col, Divider, message } from 'antd';
-import { DeleteOutlined, EditOutlined, ExclamationCircleOutlined, MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, InputNumber, Space, Row, Col, Divider, message, Tooltip } from 'antd';
+import { DeleteOutlined, EditOutlined, ExclamationCircleOutlined, MinusCircleOutlined, PlusOutlined, FileExcelOutlined } from '@ant-design/icons';
 import { collection, addDoc, doc, updateDoc, deleteDoc, runTransaction } from 'firebase/firestore';
 import dayjs from 'dayjs';
 import { db } from '../services/firebase';
@@ -24,12 +24,14 @@ const TransfersPage = () => {
     const { canCreate, canEdit, canDelete } = usePermissions();
     const [selectedCustomerSites, setSelectedCustomerSites] = useState([]);
     const [openOrders, setOpenOrders] = useState([]);
+    const [selectedRentalOrder, setSelectedRentalOrder] = useState(null);
 
     const showModal = () => {
         setEditingRecord(null);
         form.resetFields();
         setSelectedCustomerSites([]);
         setOpenOrders([]);
+        setSelectedRentalOrder(null);
         setIsModalVisible(true);
     };
 
@@ -86,6 +88,7 @@ const TransfersPage = () => {
         form.resetFields();
         setSelectedCustomerSites([]);
         setOpenOrders([]);
+        setSelectedRentalOrder(null);
     };
 
     const handleOk = async () => {
@@ -118,6 +121,8 @@ const TransfersPage = () => {
                 message.success('Transfer updated successfully!');
             } else {
                 // Create new transfer
+                let processedItems = [];
+
                 await runTransaction(db, async (transaction) => {
                     let orderRef = null;
                     let orderData = null;
@@ -136,7 +141,7 @@ const TransfersPage = () => {
                     const newTransferRef = doc(collection(db, "transfers"));
 
                     // Process each item
-                    const processedItems = [];
+                    processedItems = [];
                     for (let item of values.items) {
                         let perDayRent = item.perDayRent;
 
@@ -162,6 +167,11 @@ const TransfersPage = () => {
                             } else {
                                 throw new Error(`Product ${item.product} not found in the selected rental order.`);
                             }
+                        } else {
+                            // No rental order linked - use the provided perDayRent
+                            if (!perDayRent) {
+                                throw new Error(`Per day rent is required for ${item.product}`);
+                            }
                         }
 
                         processedItems.push({
@@ -173,13 +183,13 @@ const TransfersPage = () => {
 
                     const transferData = {
                         dcNumber: values.dcNumber,
-                        workOrderNumber: values.workOrderNumber,
+                        workOrderNumber: values.workOrderNumber || null,
                         customer: values.customer,
                         site: values.site,
                         from: values.from,
                         transferDate: values.transferDate.toISOString(),
                         rentalStartDate: values.rentalStartDate.toISOString(),
-                        rentalOrderId: values.rentalOrderId,
+                        rentalOrderId: values.rentalOrderId || null,
                         items: processedItems,
                         status: 'Rented'
                     };
@@ -191,7 +201,7 @@ const TransfersPage = () => {
                 await logAudit(
                     AUDIT_MODULES.TRANSFERS,
                     AUDIT_ACTIONS.CREATE,
-                    `Created new transfer: DC ${values.dcNumber} to ${values.customer}/${values.site} - ${processedItems.length} item(s), Total Qty: ${totalQuantity}`,
+                    `Created new transfer: DC ${values.dcNumber} to ${values.customer}/${values.site} - ${processedItems.length} item(s), Total Qty: ${totalQuantity}${values.rentalOrderId ? ' (Linked to order)' : ' (Direct transfer)'}`,
                     { dcNumber: values.dcNumber, customer: values.customer, site: values.site, from: values.from, rentalOrderId: values.rentalOrderId }
                 );
                 message.success('Transfer recorded successfully!');
@@ -246,6 +256,55 @@ const TransfersPage = () => {
         });
         setOpenOrders(relatedOrders);
         form.setFieldsValue({ rentalOrderId: undefined });
+        setSelectedRentalOrder(null);
+    };
+
+    const handleRentalOrderChange = (orderId) => {
+        if (!orderId) {
+            setSelectedRentalOrder(null);
+            return;
+        }
+
+        const order = rentalOrders.find(o => o.id === orderId);
+        if (order) {
+            setSelectedRentalOrder(order);
+
+            // Auto-populate work order number if not already filled
+            if (!form.getFieldValue('workOrderNumber')) {
+                form.setFieldsValue({ workOrderNumber: order.workOrderNumber });
+            }
+
+            // Auto-populate per day rent for existing items that match order products
+            const currentItems = form.getFieldValue('items') || [];
+            const updatedItems = currentItems.map(item => {
+                if (item.product) {
+                    const orderItem = order.items.find(oi => oi.product === item.product);
+                    if (orderItem && !item.perDayRent) {
+                        return { ...item, perDayRent: orderItem.perDayRent };
+                    }
+                }
+                return item;
+            });
+            form.setFieldsValue({ items: updatedItems });
+        }
+    };
+
+    const handleProductChange = (fieldName, productName) => {
+        if (selectedRentalOrder && productName) {
+            const orderItem = selectedRentalOrder.items.find(item => item.product === productName);
+            if (orderItem) {
+                const currentItems = form.getFieldValue('items') || [];
+                const updatedItems = [...currentItems];
+                if (!updatedItems[fieldName]?.perDayRent) {
+                    updatedItems[fieldName] = {
+                        ...updatedItems[fieldName],
+                        product: productName,
+                        perDayRent: orderItem.perDayRent
+                    };
+                    form.setFieldsValue({ items: updatedItems });
+                }
+            }
+        }
     };
 
     const expandedRowRender = (record) => {
@@ -270,6 +329,7 @@ const TransfersPage = () => {
             title: 'DC No.',
             dataIndex: 'dcNumber',
             key: 'dcNumber',
+            width: 120,
             sorter: (a, b) => a.dcNumber.localeCompare(b.dcNumber),
             filters: [...new Set(transfers.map(item => item.dcNumber))].map(dc => ({ text: dc, value: dc })),
             onFilter: (value, record) => record.dcNumber === value,
@@ -279,6 +339,7 @@ const TransfersPage = () => {
             title: 'Customer',
             dataIndex: 'customer',
             key: 'customer',
+            width: 150,
             sorter: (a, b) => a.customer.localeCompare(b.customer),
             filters: [...new Set(transfers.map(item => item.customer))].map(c => ({ text: c, value: c })),
             onFilter: (value, record) => record.customer === value,
@@ -288,6 +349,7 @@ const TransfersPage = () => {
             title: 'Site',
             dataIndex: 'site',
             key: 'site',
+            width: 150,
             sorter: (a, b) => a.site.localeCompare(b.site),
             filters: [...new Set(transfers.map(item => item.site))].map(s => ({ text: s, value: s })),
             onFilter: (value, record) => record.site === value,
@@ -297,6 +359,7 @@ const TransfersPage = () => {
             title: 'Work Order No.',
             dataIndex: 'workOrderNumber',
             key: 'workOrderNumber',
+            width: 150,
             filters: [...new Set(transfers.map(item => item.workOrderNumber).filter(Boolean))].map(wo => ({ text: wo, value: wo })),
             onFilter: (value, record) => record.workOrderNumber === value,
             filterSearch: true,
@@ -304,6 +367,7 @@ const TransfersPage = () => {
         {
             title: 'Items Count',
             key: 'itemsCount',
+            width: 100,
             render: (_, record) => {
                 // Handle both old and new structure
                 if (record.items && record.items.length > 0) {
@@ -322,6 +386,7 @@ const TransfersPage = () => {
         {
             title: 'Total Quantity',
             key: 'totalQuantity',
+            width: 120,
             render: (_, record) => {
                 // Handle both old and new structure
                 if (record.items && record.items.length > 0) {
@@ -345,6 +410,7 @@ const TransfersPage = () => {
             title: 'From',
             dataIndex: 'from',
             key: 'from',
+            width: 120,
             filters: [...new Set(transfers.map(item => item.from))].map(f => ({ text: f, value: f })),
             onFilter: (value, record) => record.from === value,
             filterSearch: true,
@@ -353,6 +419,7 @@ const TransfersPage = () => {
             title: 'Rental Start',
             dataIndex: 'rentalStartDate',
             key: 'rentalStartDate',
+            width: 140,
             render: (text) => formatDate(text),
             sorter: (a, b) => new Date(a.rentalStartDate) - new Date(b.rentalStartDate),
             defaultSortOrder: 'descend',
@@ -361,6 +428,7 @@ const TransfersPage = () => {
             title: 'Status',
             dataIndex: 'status',
             key: 'status',
+            width: 100,
             filters: [...new Set(transfers.map(item => item.status))].map(s => ({ text: s, value: s })),
             onFilter: (value, record) => record.status === value,
             filterSearch: true,
@@ -368,25 +436,86 @@ const TransfersPage = () => {
         {
             title: 'Actions',
             key: 'actions',
+            align: 'left',
+            width: 100,
+            fixed: 'right',
             render: (_, record) => (
-                <Space>
+                <Space size="small">
                     {canEdit(MODULES.TRANSFERS) && (
-                        <Button icon={<EditOutlined />} onClick={() => handleEdit(record)}>
-                            Edit
-                        </Button>
+                        <Tooltip title="Edit Transfer">
+                            <Button
+                                type="primary"
+                                icon={<EditOutlined />}
+                                onClick={() => handleEdit(record)}
+                                size="small"
+                                shape="circle"
+                            />
+                        </Tooltip>
                     )}
                     {canDelete(MODULES.TRANSFERS) && (
-                        <Button danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>
-                            Delete
-                        </Button>
+                        <Tooltip title="Delete Transfer">
+                            <Button
+                                danger
+                                icon={<DeleteOutlined />}
+                                onClick={() => handleDelete(record.id)}
+                                size="small"
+                                shape="circle"
+                            />
+                        </Tooltip>
                     )}
                 </Space>
             ),
         }
     ], [transfers, products, canEdit, canDelete]);
 
+    const exportToCSV = () => {
+        if (!transfers || transfers.length === 0) {
+            message.warn('No data to export.');
+            return;
+        }
+
+        const headers = ['DC No.', 'Customer', 'Site', 'Work Order No.', 'Product', 'Quantity', 'Per Day Rent (₹)', 'From', 'Transfer Date', 'Rental Start Date', 'Status'];
+        const csvRows = [];
+
+        transfers.forEach(transfer => {
+            // Handle both old and new structure
+            let items = transfer.items || [];
+            if (!items.length && transfer.product) {
+                items = [{ product: transfer.product, quantity: transfer.quantity, perDayRent: transfer.perDayRent }];
+            }
+
+            items.forEach(item => {
+                csvRows.push([
+                    transfer.dcNumber,
+                    transfer.customer,
+                    transfer.site,
+                    transfer.workOrderNumber || 'N/A',
+                    item.product,
+                    item.quantity,
+                    item.perDayRent || 0,
+                    transfer.from,
+                    new Date(transfer.transferDate).toLocaleString(),
+                    new Date(transfer.rentalStartDate).toLocaleString(),
+                    transfer.status || 'N/A'
+                ].map(field => JSON.stringify(field)).join(','));
+            });
+        });
+
+        const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...csvRows].join('\n');
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "transfers.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        message.success('Transfers exported successfully!');
+    };
+
     return (
-        <Card title="Material Transfers to Customers">
+        <Card title="Material Transfers to Customers" extra={
+            <Button icon={<FileExcelOutlined />} onClick={exportToCSV}>Export CSV</Button>
+        }>
              {canCreate(MODULES.TRANSFERS) &&
                 <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>New Transfer</Button>
              }
@@ -396,6 +525,7 @@ const TransfersPage = () => {
                 loading={loading}
                 rowKey="id"
                 expandable={{ expandedRowRender }}
+                scroll={{ x: 1250 }}
             />
             <Modal
                 title={editingRecord ? "Edit Material Transfer" : "New Material Transfer"}
@@ -452,8 +582,12 @@ const TransfersPage = () => {
                             </Form.Item>
                         </Col>
                         <Col span={12}>
-                            <Form.Item name="rentalOrderId" label="Link to Rental Order">
-                                <Select placeholder="Select an order (optional)" allowClear disabled={openOrders.length === 0}>
+                            <Form.Item name="rentalOrderId" label="Link to Rental Order (Optional)">
+                                <Select
+                                    placeholder="Select an order (optional - auto-fills rental rates)"
+                                    allowClear
+                                    onChange={handleRentalOrderChange}
+                                >
                                     {openOrders.map(order => <Select.Option key={order.id} value={order.id}>{order.workOrderNumber}</Select.Option>)}
                                 </Select>
                             </Form.Item>
@@ -474,7 +608,10 @@ const TransfersPage = () => {
                                             rules={[{ required: true, message: 'Missing product' }]}
                                             style={{width: '300px'}}
                                         >
-                                            <Select placeholder="Select Product">
+                                            <Select
+                                                placeholder="Select Product"
+                                                onChange={(value) => handleProductChange(name, value)}
+                                            >
                                                 {products.map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}
                                             </Select>
                                         </Form.Item>
@@ -509,10 +646,10 @@ const TransfersPage = () => {
                                         <Form.Item
                                             {...restField}
                                             name={[name, 'perDayRent']}
-                                            label="Per Day Rent (INR)"
+                                            label={selectedRentalOrder ? "Per Day Rent (INR) - Auto-filled" : "Per Day Rent (INR)"}
                                             rules={[{ required: true, type: 'number', min: 0, message: 'Invalid rent' }]}
                                         >
-                                            <InputNumber placeholder="Rent/Day" />
+                                            <InputNumber placeholder={selectedRentalOrder ? "Auto-filled from order" : "Rent/Day"} />
                                         </Form.Item>
                                         <MinusCircleOutlined onClick={() => remove(name)} />
                                     </Space>

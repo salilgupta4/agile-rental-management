@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Select, DatePicker, Radio, Space, InputNumber, Row, Col, Divider, message } from 'antd';
-import { DeleteOutlined, EditOutlined, ExclamationCircleOutlined, MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, ExclamationCircleOutlined, MinusCircleOutlined, PlusOutlined, FileExcelOutlined } from '@ant-design/icons';
 import { collection, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import dayjs from 'dayjs';
 import { db } from '../services/firebase';
@@ -369,8 +369,69 @@ const SalesPage = () => {
         }
     ];
 
+    const exportToCSV = () => {
+        if (!sales || sales.length === 0) {
+            message.warn('No data to export.');
+            return;
+        }
+
+        const headers = ['Invoice No.', 'Invoice Date', 'Product', 'Quantity', 'Sale Price (₹)', 'Sold From', 'Base Amount (₹)', 'CGST (₹)', 'SGST (₹)', 'IGST (₹)', 'Total GST (₹)', 'Total Amount (₹)'];
+        const csvRows = [];
+
+        sales.forEach(sale => {
+            const gstData = sale.gstBreakdown || (() => {
+                // Handle both old and new structure
+                let baseAmount = 0;
+                if (sale.items && sale.items.length > 0) {
+                    baseAmount = sale.items.reduce((sum, item) => sum + (item.quantity * item.salePrice), 0);
+                } else if (sale.product) {
+                    baseAmount = Number(sale.quantity) * Number(sale.salePrice);
+                }
+                const taxType = sale.taxType || 'local';
+                return calculateGST(baseAmount, taxType);
+            })();
+
+            const soldFrom = sale.fromWarehouse ? `Warehouse: ${sale.fromWarehouse}` : `Client: ${sale.fromCustomer} (${sale.fromSite})`;
+
+            // Handle both old and new structure
+            let items = sale.items || [];
+            if (!items.length && sale.product) {
+                items = [{ product: sale.product, quantity: sale.quantity, salePrice: sale.salePrice }];
+            }
+
+            items.forEach(item => {
+                csvRows.push([
+                    sale.invoiceNumber,
+                    new Date(sale.invoiceDate).toLocaleString(),
+                    item.product,
+                    item.quantity,
+                    item.salePrice.toFixed(2),
+                    soldFrom,
+                    gstData.baseAmount.toFixed(2),
+                    gstData.cgst.toFixed(2),
+                    gstData.sgst.toFixed(2),
+                    gstData.igst.toFixed(2),
+                    gstData.totalGST.toFixed(2),
+                    gstData.totalAmount.toFixed(2)
+                ].map(field => JSON.stringify(field)).join(','));
+            });
+        });
+
+        const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...csvRows].join('\n');
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "sales.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        message.success('Sales exported successfully!');
+    };
+
     return (
-        <Card title="Obsolete/Damaged Sales">
+        <Card title="Obsolete/Damaged Sales" extra={
+            <Button icon={<FileExcelOutlined />} onClick={exportToCSV}>Export CSV</Button>
+        }>
             {canCreate(MODULES.SALES) &&
                 <Button type="primary" onClick={showModal} style={{ marginBottom: 16 }}>Record Sale</Button>
             }
