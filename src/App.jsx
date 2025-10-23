@@ -14,7 +14,8 @@ import {
   FileDoneOutlined,
   FileExcelOutlined,
   DownOutlined,
-  HistoryOutlined
+  HistoryOutlined,
+  FileTextOutlined
 } from '@ant-design/icons';
 import { signOut } from 'firebase/auth';
 import { auth } from './services/firebase';
@@ -35,6 +36,7 @@ import ReturnsPage from './pages/ReturnsPage';
 import SalesPage from './pages/SalesPage';
 import RentalOrdersPage from './pages/RentalOrdersPage';
 import ReportsPage from './pages/ReportsPage';
+import ScratchpadPage from './pages/ScratchpadPage';
 import SettingsPage from './pages/SettingsPage';
 import AuditLogsPage from './pages/AuditLogsPage';
 
@@ -113,6 +115,12 @@ const MainApp = () => {
       icon: <BarChartOutlined />,
       label: 'Reports',
       module: MODULES.REPORTS
+    },
+    {
+      key: 'scratchpad',
+      icon: <FileTextOutlined />,
+      label: 'Scratchpad',
+      module: MODULES.SCRATCHPAD
     }
   ];
 
@@ -163,6 +171,8 @@ const MainApp = () => {
         return <RentalOrdersPage />;
       case 'reports':
         return <ReportsPage />;
+      case 'scratchpad':
+        return <ScratchpadPage />;
       case 'settings':
         return <SettingsPage />;
       case 'auditLogs':

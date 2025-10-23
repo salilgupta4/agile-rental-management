@@ -59,6 +59,7 @@ export const AUDIT_MODULES = {
     RETURNS: 'Returns',
     SALES: 'Sales',
     RENTAL_ORDERS: 'Rental Orders',
+    SCRATCHPAD: 'Scratchpad',
     USERS: 'User Management',
     SETTINGS: 'Settings'
 };

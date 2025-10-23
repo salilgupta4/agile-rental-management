@@ -486,8 +486,8 @@ const SalesPage = () => {
                         <Row gutter={16}>
                             <Col span={24}>
                                 <Form.Item name="location" label="Warehouse" rules={[{ required: true }]}>
-                                    <Select placeholder="Select a warehouse" onChange={(val) => handleLocationChange('warehouse', val)}>
-                                        {warehouses.map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
+                                    <Select placeholder="Select a warehouse" onChange={(val) => handleLocationChange('warehouse', val)} showSearch optionFilterProp="children">
+                                        {[...warehouses].sort((a, b) => a.name.localeCompare(b.name)).map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
                                     </Select>
                                 </Form.Item>
                             </Col>
@@ -501,15 +501,15 @@ const SalesPage = () => {
                                     <Select placeholder="Select a customer" onChange={(val) => {
                                         form.setFieldsValue({ site: undefined });
                                         setAvailableProducts([]);
-                                    }}>
-                                        {customers.map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}
+                                    }} showSearch optionFilterProp="children">
+                                        {[...customers].sort((a, b) => a.name.localeCompare(b.name)).map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}
                                     </Select>
                                 </Form.Item>
                             </Col>
                             <Col span={12}>
                                 <Form.Item name="site" label="Site" rules={[{ required: true }]}>
-                                    <Select placeholder="Select a site" onChange={(val) => handleLocationChange('client', form.getFieldValue('location'), val)}>
-                                        {(customers.find(c => c.name === form.getFieldValue('location'))?.sites || []).map(s => <Select.Option key={s} value={s}>{s}</Select.Option>)}
+                                    <Select placeholder="Select a site" onChange={(val) => handleLocationChange('client', form.getFieldValue('location'), val)} showSearch optionFilterProp="children">
+                                        {[...(customers.find(c => c.name === form.getFieldValue('location'))?.sites || [])].sort().map(s => <Select.Option key={s} value={s}>{s}</Select.Option>)}
                                     </Select>
                                 </Form.Item>
                             </Col>
@@ -530,8 +530,8 @@ const SalesPage = () => {
                                             rules={[{ required: true, message: 'Missing product' }]}
                                             style={{width: '300px'}}
                                         >
-                                            <Select placeholder="Select Product" disabled={availableProducts.length === 0}>
-                                                {availableProducts.map(p => <Select.Option key={p} value={p}>{p}</Select.Option>)}
+                                            <Select placeholder="Select Product" disabled={availableProducts.length === 0} showSearch optionFilterProp="children">
+                                                {[...availableProducts].sort().map(p => <Select.Option key={p} value={p}>{p}</Select.Option>)}
                                             </Select>
                                         </Form.Item>
                                         <Form.Item

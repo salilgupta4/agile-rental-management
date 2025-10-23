@@ -21,5 +21,6 @@ export const COLLECTION_NAMES = {
   RETURNS: 'returns',
   SALES: 'sales',
   RENTAL_ORDERS: 'rentalOrders',
+  SCRATCHPAD: 'scratchpads',
   CONFIG: 'config'
 };

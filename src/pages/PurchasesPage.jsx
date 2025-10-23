@@ -318,8 +318,8 @@ const PurchasesPage = () => {
                         </Col>
                         <Col span={8}>
                             <Form.Item name="warehouse" label="Warehouse" rules={[{ required: true }]}>
-                                <Select placeholder="Select a warehouse">
-                                    {warehouses.map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
+                                <Select placeholder="Select a warehouse" showSearch optionFilterProp="children">
+                                    {[...warehouses].sort((a, b) => a.name.localeCompare(b.name)).map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
                                 </Select>
                             </Form.Item>
                         </Col>
@@ -352,8 +352,8 @@ const PurchasesPage = () => {
                                             rules={[{ required: true, message: 'Missing product' }]}
                                             style={{width: '250px'}}
                                         >
-                                            <Select placeholder="Select Product">
-                                                {products.map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}
+                                            <Select placeholder="Select Product" showSearch optionFilterProp="children">
+                                                {[...products].sort((a, b) => a.name.localeCompare(b.name)).map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}
                                             </Select>
                                         </Form.Item>
                                         <Form.Item

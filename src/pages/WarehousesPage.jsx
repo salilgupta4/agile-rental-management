@@ -82,6 +82,7 @@ const WarehousesPage = () => {
             dataIndex: 'name',
             key: 'name',
             sorter: (a, b) => a.name.localeCompare(b.name),
+            defaultSortOrder: 'ascend',
             filters: [...new Set(data.map(item => item.name))].map(name => ({ text: name, value: name })),
             onFilter: (value, record) => record.name === value,
         },

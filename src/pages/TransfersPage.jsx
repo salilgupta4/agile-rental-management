@@ -543,15 +543,15 @@ const TransfersPage = () => {
                         </Col>
                         <Col span={8}>
                             <Form.Item name="customer" label="Customer" rules={[{ required: true }]}>
-                                <Select placeholder="Select a customer" onSelect={handleCustomerChange}>
-                                    {customers.map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}
+                                <Select placeholder="Select a customer" onSelect={handleCustomerChange} showSearch optionFilterProp="children">
+                                    {[...customers].sort((a, b) => a.name.localeCompare(b.name)).map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}
                                 </Select>
                             </Form.Item>
                         </Col>
                         <Col span={8}>
                             <Form.Item name="site" label="Site Name" rules={[{ required: true }]}>
-                                <Select placeholder="Select a site" disabled={selectedCustomerSites.length === 0} onSelect={handleSiteChange}>
-                                    {selectedCustomerSites.map(site => <Select.Option key={site} value={site}>{site}</Select.Option>)}
+                                <Select placeholder="Select a site" disabled={selectedCustomerSites.length === 0} onSelect={handleSiteChange} showSearch optionFilterProp="children">
+                                    {[...selectedCustomerSites].sort().map(site => <Select.Option key={site} value={site}>{site}</Select.Option>)}
                                 </Select>
                             </Form.Item>
                         </Col>
@@ -559,8 +559,8 @@ const TransfersPage = () => {
                     <Row gutter={16}>
                         <Col span={8}>
                             <Form.Item name="from" label="Transfer From (Warehouse)" rules={[{ required: true }]}>
-                                <Select placeholder="Select a warehouse">
-                                    {warehouses.map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
+                                <Select placeholder="Select a warehouse" showSearch optionFilterProp="children">
+                                    {[...warehouses].sort((a, b) => a.name.localeCompare(b.name)).map(w => <Select.Option key={w.id} value={w.name}>{w.name}</Select.Option>)}
                                 </Select>
                             </Form.Item>
                         </Col>
@@ -587,8 +587,10 @@ const TransfersPage = () => {
                                     placeholder="Select an order (optional - auto-fills rental rates)"
                                     allowClear
                                     onChange={handleRentalOrderChange}
+                                    showSearch
+                                    optionFilterProp="children"
                                 >
-                                    {openOrders.map(order => <Select.Option key={order.id} value={order.id}>{order.workOrderNumber}</Select.Option>)}
+                                    {[...openOrders].sort((a, b) => a.workOrderNumber.localeCompare(b.workOrderNumber)).map(order => <Select.Option key={order.id} value={order.id}>{order.workOrderNumber}</Select.Option>)}
                                 </Select>
                             </Form.Item>
                         </Col>
@@ -611,8 +613,10 @@ const TransfersPage = () => {
                                             <Select
                                                 placeholder="Select Product"
                                                 onChange={(value) => handleProductChange(name, value)}
+                                                showSearch
+                                                optionFilterProp="children"
                                             >
-                                                {products.map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}
+                                                {[...products].sort((a, b) => a.name.localeCompare(b.name)).map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}
                                             </Select>
                                         </Form.Item>
                                         <Form.Item

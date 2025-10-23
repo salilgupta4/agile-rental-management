@@ -84,6 +84,7 @@ const ProductsPage = () => {
             dataIndex: 'name',
             key: 'name',
             sorter: (a, b) => a.name.localeCompare(b.name),
+            defaultSortOrder: 'ascend',
             filters: [...new Set(data.map(item => item.name))].map(name => ({ text: name, value: name })),
             onFilter: (value, record) => record.name === value,
         },
@@ -143,8 +144,8 @@ const ProductsPage = () => {
                         <Input />
                     </Form.Item>
                     <Form.Item name="uom" label="UOM (Unit of Measurement)" rules={[{ required: true }]}>
-                        <Select placeholder="Select a UOM">
-                            {UOM_OPTIONS.map(uom => <Select.Option key={uom} value={uom}>{uom}</Select.Option>)}
+                        <Select placeholder="Select a UOM" showSearch optionFilterProp="children">
+                            {[...UOM_OPTIONS].sort().map(uom => <Select.Option key={uom} value={uom}>{uom}</Select.Option>)}
                         </Select>
                     </Form.Item>
                 </Form>

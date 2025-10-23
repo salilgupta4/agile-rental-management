@@ -309,15 +309,15 @@ const RentalOrdersPage = () => {
                                     const customer = customers.find(c => c.name === val);
                                     setSelectedCustomerSites(customer ? customer.sites || [] : []);
                                     form.setFieldsValue({ siteName: undefined });
-                                }}>
-                                    {customers.map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}
+                                }} showSearch optionFilterProp="children">
+                                    {[...customers].sort((a, b) => a.name.localeCompare(b.name)).map(c => <Select.Option key={c.id} value={c.name}>{c.name}</Select.Option>)}
                                 </Select>
                             </Form.Item>
                         </Col>
                         <Col span={8}>
                             <Form.Item name="siteName" label="Site Name" rules={[{ required: true }]}>
-                                <Select placeholder="Select a site" disabled={selectedCustomerSites.length === 0}>
-                                    {selectedCustomerSites.map(site => <Select.Option key={site} value={site}>{site}</Select.Option>)}
+                                <Select placeholder="Select a site" disabled={selectedCustomerSites.length === 0} showSearch optionFilterProp="children">
+                                    {[...selectedCustomerSites].sort().map(site => <Select.Option key={site} value={site}>{site}</Select.Option>)}
                                 </Select>
                             </Form.Item>
                         </Col>
@@ -352,8 +352,8 @@ const RentalOrdersPage = () => {
                                             rules={[{ required: true, message: 'Missing product' }]}
                                             style={{width: '250px'}}
                                         >
-                                            <Select placeholder="Select Product">
-                                                {products.map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}
+                                            <Select placeholder="Select Product" showSearch optionFilterProp="children">
+                                                {[...products].sort((a, b) => a.name.localeCompare(b.name)).map(p => <Select.Option key={p.id} value={p.name}>{p.name}</Select.Option>)}
                                             </Select>
                                         </Form.Item>
                                         <Form.Item

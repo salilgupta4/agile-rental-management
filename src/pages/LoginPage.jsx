@@ -47,7 +47,7 @@ const LoginPage = () => {
                     </Form.Item>
                     {isRegistering && (
                         <Form.Item name="role" label="Role" rules={[{ required: true, message: 'Please select a role!' }]}>
-                            <Select placeholder="Select a role">
+                            <Select placeholder="Select a role" showSearch optionFilterProp="children">
                                 <Select.Option value="admin">Admin</Select.Option>
                                 <Select.Option value="user">User</Select.Option>
                                 <Select.Option value="viewer">Viewer</Select.Option>
